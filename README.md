@@ -125,16 +125,6 @@ python src/integrated_system_final.py
 
 このプロジェクトはMITライセンスの下で公開されています。詳細は[LICENSE](LICENSE)ファイルをご覧ください。
 
-## 📞 お問い合わせ
-
-- Email: research@manus.ai
-- Web: https://manus.ai
-- Demo: https://60h5imc0l6kn.manus.space
-
-## 🙏 謝辞
-
-この研究を可能にしたオープンソースコミュニティ、特にPyTorch、Transformers、ROCmの開発者に感謝いたします。
-
 ---
 
 **Infer-OS: 次世代AI推論システムの実現** 🚀
