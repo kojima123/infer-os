@@ -22,26 +22,29 @@ class SimpleNPUDecoder:
         self.setup_npu()
     
     def setup_npu(self):
-        """NPU セットアップ（NPU使用強制版）"""
+        """NPU セットアップ（設定ファイル対応版）"""
         try:
-            print("🚀 NPU使用強制モード初期化中...")
+            print("🚀 NPU設定ファイル対応版初期化中...")
+            
+            # NPU設定ファイル読み込み
+            npu_device_id = self.load_npu_config()
             
             # シンプルなONNXモデル作成（実際のNPU処理用）
             self.create_simple_onnx_model()
             
-            # NPU専用DirectMLプロバイダー設定（強制モード）
+            # NPU専用DirectMLプロバイダー設定
             providers = [
                 ('DmlExecutionProvider', {
-                    'device_id': 0,  # NPUデバイスID
+                    'device_id': npu_device_id,  # 設定ファイルから読み込み
                     'enable_dynamic_graph_fusion': True,
                     'enable_graph_optimization': True,
                     'disable_memory_arena': False,  # メモリアリーナ有効
-                    'memory_limit_mb': 1024,  # NPUメモリ制限
+                    'memory_limit_mb': 2048,  # NPUメモリ制限増加
                 })
             ]
             
-            print("🔧 NPU専用DirectMLセッション作成中...")
-            print("  🎯 NPUハードウェア強制使用モード")
+            print(f"🔧 NPU専用DirectMLセッション作成中 (デバイスID: {npu_device_id})...")
+            print("  🎯 NPU Compute Accelerator Device使用")
             
             # セッションオプション設定（NPU最適化）
             session_options = ort.SessionOptions()
@@ -71,26 +74,60 @@ class SimpleNPUDecoder:
             print("✅ NPU専用セッション作成成功")
             print(f"  📥 入力: {input_info.name} {input_info.shape} {input_info.type}")
             print(f"  📤 出力: {output_info.name} {output_info.shape} {output_info.type}")
+            print(f"  🎯 使用デバイス: NPU (ID: {npu_device_id})")
             
             # 重いテスト実行（NPU負荷確実化）
             print("  🧪 NPU負荷テスト実行中...")
             test_input = np.random.randn(1, 512).astype(np.float32)
             
             # 複数回実行でNPU使用率を確実に上げる
-            for i in range(20):  # 20回実行
+            for i in range(30):  # 30回実行に増加
                 test_result = self.npu_session.run(['output'], {'input': test_input})
-                if i % 5 == 0:
-                    print(f"    🔄 NPU負荷テスト {i+1}/20")
+                if i % 10 == 0:
+                    print(f"    🔄 NPU負荷テスト {i+1}/30")
             
             print(f"  ✅ NPU負荷テスト完了: 出力形状 {test_result[0].shape}")
-            print("  🎯 NPUハードウェア使用率を確認してください")
+            print("  🎯 タスクマネージャーでNPU使用率を確認してください")
             
         except Exception as e:
             print(f"⚠️ NPUセットアップ失敗: {e}")
             print(f"  詳細: {type(e).__name__}")
+            print("  💡 python npu_device_selector.py を実行してNPUデバイスIDを特定してください")
             import traceback
             traceback.print_exc()
             self.npu_session = None
+    
+    def load_npu_config(self) -> int:
+        """NPU設定ファイル読み込み"""
+        try:
+            import json
+            import os
+            
+            config_file = 'npu_config.json'
+            
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                npu_device_id = config.get('npu_device_id', 0)
+                print(f"  📋 NPU設定ファイル読み込み: デバイスID {npu_device_id}")
+                
+                # パフォーマンス情報表示
+                performance = config.get('performance', {})
+                if performance.get('success'):
+                    throughput = performance.get('throughput', 0)
+                    print(f"  ⚡ 期待パフォーマンス: {throughput:.1f}回/秒")
+                
+                return npu_device_id
+            else:
+                print("  ⚠️ NPU設定ファイルが見つかりません、デフォルトID 0を使用")
+                print("  💡 python npu_device_selector.py を実行して最適なデバイスIDを特定してください")
+                return 0
+                
+        except Exception as e:
+            print(f"  ❌ NPU設定ファイル読み込みエラー: {e}")
+            print("  💡 デフォルトデバイスID 0を使用")
+            return 0
     
     def create_simple_onnx_model(self):
         """シンプルなONNXモデル作成（ONNX Runtime完全互換版）"""
