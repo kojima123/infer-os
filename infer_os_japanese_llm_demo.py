@@ -479,20 +479,23 @@ class InferOSJapaneseLLMDemo:
             if torch.cuda.is_available():
                 inputs = {k: v.cuda() for k, v in inputs.items()}
             
-            # max_new_tokens設定
+            # max_new_tokens設定（改善版）
             if max_new_tokens is None:
-                actual_max_new_tokens = max_length
+                actual_max_new_tokens = min(max_length, 150)  # デフォルト150トークン
             else:
                 actual_max_new_tokens = max_new_tokens
             
-            # 生成設定（日本語最適化・長いプロンプト対応）
+            # 生成設定（日本語最適化・品質向上版）
             generation_config = {
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,
-                "do_sample": do_sample,
-                "top_p": 0.95,
-                "top_k": 40,
-                "repetition_penalty": 1.1,
+                "max_new_tokens": actual_max_new_tokens,
+                "min_length": max(20, actual_max_new_tokens // 3),  # 最小長設定
+                "temperature": max(0.7, temperature),  # 最低0.7で創造性確保
+                "do_sample": True,  # 常にサンプリング有効
+                "top_p": 0.9,  # 0.95→0.9でより集中
+                "top_k": 50,  # 40→50でより多様性
+                "repetition_penalty": 1.05,  # 1.1→1.05で繰り返し制限緩和
+                "length_penalty": 1.2,  # 長い文章を促進
+                "no_repeat_ngram_size": 2,  # 3→2で繰り返し制限緩和
                 "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id,
                 "eos_token_id": self.tokenizer.eos_token_id,
                 "use_cache": True,
@@ -529,17 +532,21 @@ class InferOSJapaneseLLMDemo:
             else:
                 generated_only = generated_text.strip()
             
-            # 空の結果や「。」のみの場合の対処
-            if not generated_only or generated_only == "。" or len(generated_only) < 3:
+            # 空の結果や短すぎる場合の対処（改善版）
+            if not generated_only or generated_only == "。" or len(generated_only) < 10:
                 print("⚠️ 生成結果が短すぎます。再生成を試行します...")
                 
-                # より緩い設定で再生成
+                # より積極的な設定で再生成
                 retry_config = generation_config.copy()
                 retry_config.update({
-                    "temperature": min(temperature + 0.2, 1.0),
-                    "top_p": 0.98,
-                    "repetition_penalty": 1.05,
-                    "min_length": len(inputs['input_ids'][0]) + 10,
+                    "max_new_tokens": actual_max_new_tokens * 2,  # 2倍の長さ
+                    "min_length": len(inputs['input_ids'][0]) + 30,  # より長い最小長
+                    "temperature": min(temperature + 0.3, 0.95),  # より高い温度
+                    "top_p": 0.95,  # より多様性
+                    "top_k": 60,  # より多くの選択肢
+                    "repetition_penalty": 1.02,  # さらに緩い繰り返し制限
+                    "length_penalty": 1.5,  # より強い長さ促進
+                    "no_repeat_ngram_size": 1,  # 最小限の繰り返し制限
                 })
                 
                 with torch.no_grad():

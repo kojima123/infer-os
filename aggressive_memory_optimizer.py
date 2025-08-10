@@ -101,7 +101,7 @@ class AggressiveMemoryOptimizer:
                 "torch_dtype": torch.float16,  # float32 -> float16で50%削減
                 "low_cpu_mem_usage": True,
                 "device_map": "cpu",
-                "max_memory": {0: f"{int(self.get_available_memory() * 0.8)}GB"},
+                "max_memory": {0: f"{int(self.get_available_memory() * 0.9)}GB"},  # 0.8→0.9に緩和
                 "offload_folder": "/tmp/offload",  # ディスクオフロード
                 "offload_state_dict": True,
             }
@@ -215,7 +215,7 @@ class AggressiveMemoryOptimizer:
                     "device_map": "cpu",
                     "low_cpu_mem_usage": True,
                     "quantization_config": quantization_config,
-                    "max_memory": {0: "6GB"},  # さらに制限
+                    "max_memory": {0: "8GB"},  # 6GB→8GBに緩和
                 }
                 
             except ImportError:
@@ -225,7 +225,7 @@ class AggressiveMemoryOptimizer:
                     "torch_dtype": torch.float16,  # float16を使用
                     "device_map": "cpu",
                     "low_cpu_mem_usage": True,
-                    "max_memory": {0: "6GB"},
+                    "max_memory": {0: "8GB"},  # 6GB→8GBに緩和
                 }
             
             model = AutoModelForCausalLM.from_pretrained(
