@@ -38,15 +38,30 @@ class SimpleNPUDecoder:
                 })
             ]
             
+            print("🔧 DirectMLセッション作成中...")
             self.npu_session = ort.InferenceSession(
                 self.onnx_model_bytes,
                 providers=providers
             )
             
+            # セッション情報確認
+            input_info = self.npu_session.get_inputs()[0]
+            output_info = self.npu_session.get_outputs()[0]
+            
             print("✅ NPUセッション作成成功")
+            print(f"  📥 入力: {input_info.name} {input_info.shape} {input_info.type}")
+            print(f"  📤 出力: {output_info.name} {output_info.shape} {output_info.type}")
+            
+            # テスト実行
+            test_input = np.random.randn(1, 4096).astype(np.float32)
+            test_result = self.npu_session.run(['output'], {'input': test_input})
+            print(f"  🧪 テスト実行成功: 出力形状 {test_result[0].shape}")
             
         except Exception as e:
             print(f"⚠️ NPUセットアップ失敗: {e}")
+            print(f"  詳細: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
             self.npu_session = None
     
     def create_simple_onnx_model(self):

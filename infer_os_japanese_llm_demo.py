@@ -361,10 +361,14 @@ class JapaneseHeavyLLMDemo:
                     self.tokenizer = self.aggressive_memory_optimizer.tokenizer
                     print("✅ 積極的メモリ最適化モデルロード完了")
                     
-                    # NPU推論セットアップ
+                    # シンプルNPUデコーダー無条件セットアップ
+                    print("🚀 シンプルNPUデコーダーセットアップ開始...")
+                    _setup_npu_decode_integration(self)
+                    
+                    # 従来のNPU推論セットアップ（オプション）
                     if self.npu_optimizer and self.npu_optimizer.npu_available:
-                        print("🚀 NPU推論セットアップ開始...")
-                        _setup_npu_decode_integration(self)
+                        print("🔄 従来NPU推論セットアップ...")
+                        _setup_npu_inference(self)
                     
                     return True
                 else:
@@ -437,6 +441,10 @@ class JapaneseHeavyLLMDemo:
                     print("✅ NPU推論セットアップ完了")
                 else:
                     print("⚠️ NPU推論セットアップ失敗、CPU推論を使用")
+            
+            # シンプルNPUデコーダー無条件セットアップ
+            print("🚀 シンプルNPUデコーダーセットアップ開始...")
+            _setup_npu_decode_integration(self)
             
             return True
             
