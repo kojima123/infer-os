@@ -25,6 +25,8 @@ class AggressiveMemoryOptimizer:
         self.model_name = model_name
         self.chunk_size = 1024 * 1024 * 512  # 512MB chunks
         self.max_memory_usage = 0.85  # 最大メモリ使用率85%
+        self.model = None  # モデルインスタンス
+        self.tokenizer = None  # トークナイザーインスタンス
         
     def get_available_memory(self) -> float:
         """利用可能メモリをGB単位で取得"""
@@ -130,6 +132,10 @@ class AggressiveMemoryOptimizer:
             # Step 6: ロード後最適化
             self._post_load_optimization(model)
             
+            # インスタンス変数に保存
+            self.model = model
+            self.tokenizer = tokenizer
+            
             return model, tokenizer
             
         except Exception as e:
@@ -194,6 +200,10 @@ class AggressiveMemoryOptimizer:
             
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
+            
+            # インスタンス変数に保存
+            self.model = model
+            self.tokenizer = tokenizer
             
             print("✅ 緊急フォールバック成功")
             return model, tokenizer
