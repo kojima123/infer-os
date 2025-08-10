@@ -568,6 +568,8 @@ class JapaneseHeavyLLMDemo:
                 except Exception as e:
                     print(f"⚠️ NPU統合デコードエラー: {e}")
                     print("💡 CPUフォールバックに切り替えます")
+                    import traceback
+                    traceback.print_exc()  # デバッグ用
             
             # CPUフォールバック実行
             print("🖥️ CPU推論を使用中...")

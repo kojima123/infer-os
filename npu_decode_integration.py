@@ -172,8 +172,13 @@ class NPUDecodeIntegrator:
                 
                 # 終了条件チェック
                 if next_token.item() == self.tokenizer.eos_token_id:
-                    print(f"  🏁 EOS検出、生成終了 (step {step})")
-                    break
+                    # EOS検出時も最小限の生成を保証
+                    if step < 5:  # 最初の5ステップではEOSを無視
+                        print(f"  ⚠️ 早期EOS検出 (step {step})、生成継続")
+                        continue
+                    else:
+                        print(f"  🏁 EOS検出、生成終了 (step {step})")
+                        break
                 
                 # 進捗表示
                 if (step + 1) % 10 == 0:

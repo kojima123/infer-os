@@ -217,7 +217,7 @@ class NPUGraph:
             
             # モデル作成
             model = helper.make_model(graph)
-            model.opset_import[0].version = 14
+            model.opset_import[0].version = 10  # DirectML対応のため10に変更
             
             # 検証
             onnx.checker.check_model(model)
