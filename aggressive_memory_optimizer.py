@@ -110,11 +110,31 @@ class AggressiveMemoryOptimizer:
             available_memory = self.get_available_memory()
             if available_memory < 10:  # 10GB未満の場合
                 print("⚠️ 極度のメモリ不足を検出 - 緊急設定を適用")
-                model_kwargs.update({
-                    "torch_dtype": torch.int8,  # さらに積極的な量子化
-                    "load_in_8bit": True,
-                    "llm_int8_enable_fp32_cpu_offload": True,
-                })
+                
+                # BitsAndBytesConfigを使用した正しい量子化設定
+                try:
+                    from transformers import BitsAndBytesConfig
+                    
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                        llm_int8_enable_fp32_cpu_offload=True,
+                        llm_int8_has_fp16_weight=False,
+                        llm_int8_threshold=6.0,
+                    )
+                    
+                    model_kwargs.update({
+                        "torch_dtype": torch.float16,  # float16を維持
+                        "quantization_config": quantization_config,
+                    })
+                    
+                    # 非推奨パラメータを削除
+                    model_kwargs.pop("load_in_8bit", None)
+                    
+                except ImportError:
+                    print("⚠️ BitsAndBytesConfig利用不可、基本設定を使用")
+                    model_kwargs.update({
+                        "torch_dtype": torch.float16,  # int8ではなくfloat16を使用
+                    })
             
             # Step 5: モデルロード実行
             before_memory = psutil.virtual_memory().used / (1024**3)
@@ -178,15 +198,35 @@ class AggressiveMemoryOptimizer:
             self.force_memory_cleanup()
             self.force_memory_cleanup()  # 2回実行
             
-            # 最小設定
-            model_kwargs = {
-                "trust_remote_code": True,
-                "torch_dtype": torch.int8,
-                "device_map": "cpu",
-                "low_cpu_mem_usage": True,
-                "load_in_8bit": True,
-                "max_memory": {0: "20GB"},  # 強制的に20GBに制限
-            }
+            # 最小設定（BitsAndBytesConfig使用）
+            try:
+                from transformers import BitsAndBytesConfig
+                
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True,
+                    llm_int8_has_fp16_weight=False,
+                    llm_int8_threshold=6.0,
+                )
+                
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "torch_dtype": torch.float16,  # float16を使用
+                    "device_map": "cpu",
+                    "low_cpu_mem_usage": True,
+                    "quantization_config": quantization_config,
+                    "max_memory": {0: "6GB"},  # さらに制限
+                }
+                
+            except ImportError:
+                print("⚠️ BitsAndBytesConfig利用不可、基本設定を使用")
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "torch_dtype": torch.float16,  # float16を使用
+                    "device_map": "cpu",
+                    "low_cpu_mem_usage": True,
+                    "max_memory": {0: "6GB"},
+                }
             
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
