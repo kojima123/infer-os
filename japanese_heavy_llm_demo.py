@@ -60,6 +60,14 @@ try:
 except ImportError:
     AGGRESSIVE_MEMORY_AVAILABLE = False
     AggressiveMemoryOptimizer = None
+
+# Windows NPU最適化機能のインポート
+try:
+    from windows_npu_optimizer import WindowsNPUOptimizer
+    WINDOWS_NPU_AVAILABLE = True
+except ImportError:
+    WINDOWS_NPU_AVAILABLE = False
+    WindowsNPUOptimizer = None
     QuantizationProfile = None
 
 try:
@@ -188,7 +196,8 @@ class JapaneseHeavyLLMDemo:
                  use_4bit: bool = False, use_8bit: bool = False,
                  use_onnx: bool = False, onnx_optimization_level: int = 2,
                  quantization_profile: str = "balanced", use_advanced_quant: bool = False,
-                 infer_os_enabled: bool = True, use_aggressive_memory: bool = False):
+                 infer_os_enabled: bool = True, use_aggressive_memory: bool = False,
+                 enable_npu: bool = True):
         self.model_name = model_name
         self.use_4bit = use_4bit
         self.use_8bit = use_8bit
@@ -196,6 +205,7 @@ class JapaneseHeavyLLMDemo:
         self.onnx_optimization_level = onnx_optimization_level
         self.use_advanced_quant = use_advanced_quant
         self.use_aggressive_memory = use_aggressive_memory
+        self.enable_npu = enable_npu
         self.infer_os_enabled = infer_os_enabled
         
         self.model = None
@@ -234,6 +244,32 @@ class JapaneseHeavyLLMDemo:
                 self.aggressive_memory_optimizer = None
         else:
             self.aggressive_memory_optimizer = None
+        
+        # Windows NPU最適化設定
+        if enable_npu and WINDOWS_NPU_AVAILABLE and platform.system() == "Windows":
+            try:
+                self.npu_optimizer = WindowsNPUOptimizer()
+                print("🔍 Windows NPU最適化機能を初期化しました")
+                
+                # NPU検出と有効化
+                npu_info = self.npu_optimizer.detect_npu_hardware()
+                if npu_info["detected"]:
+                    success = self.npu_optimizer.enable_npu_optimization()
+                    if success:
+                        print(f"✅ {npu_info['type']} NPU最適化を有効化しました")
+                    else:
+                        print("⚠️ NPU最適化の有効化に失敗しました")
+                else:
+                    print("⚠️ NPUが検出されませんでした")
+                    # DirectML依存関係のインストールを提案
+                    print("💡 DirectML依存関係をインストールしてNPU対応を改善できます")
+                    
+            except Exception as e:
+                print(f"⚠️ Windows NPU最適化初期化エラー: {e}")
+                self.enable_npu = False
+                self.npu_optimizer = None
+        else:
+            self.npu_optimizer = None
         
         # システム情報を取得・保存
         self.system_info = self._get_system_info()
@@ -1431,6 +1467,10 @@ def main():
                         help="高度な量子化最適化を使用")
     parser.add_argument("--use-aggressive-memory", action="store_true",
                         help="積極的メモリ最適化を使用（27.8GB環境対応）")
+    parser.add_argument("--enable-npu", action="store_true", default=True,
+                        help="Windows NPU最適化を有効化（デフォルト: 有効）")
+    parser.add_argument("--disable-npu", action="store_true",
+                        help="Windows NPU最適化を無効化")
     parser.add_argument("--quantization-profile", type=str, default="balanced",
                         choices=["safe", "balanced", "aggressive"],
                         help="量子化プロファイル")
@@ -1513,6 +1553,7 @@ def main():
             quantization_profile=args.quantization_profile,
             use_advanced_quant=args.use_advanced_quant,
             use_aggressive_memory=args.use_aggressive_memory,
+            enable_npu=args.enable_npu and not args.disable_npu,
             infer_os_enabled=infer_os_enabled
         )
         
