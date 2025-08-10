@@ -522,51 +522,46 @@ class JapaneseHeavyLLMDemo:
                 "length_penalty": 1.0,
             }
             
-            # NPU統合デコード優先実行
-            if self.npu_decode_available and self.npu_decode_integrator:
-                print("⚡ NPU統合デコードを使用中...")
+            # シンプルNPUデコード優先実行
+            if self.npu_decode_available and hasattr(self, 'simple_npu_decoder') and self.simple_npu_decoder:
+                print("⚡ シンプルNPUデコードを使用中...")
                 try:
-                    npu_result = self.npu_decode_integrator.generate_with_npu_decode(
-                        prompt,
-                        max_new_tokens=actual_max_new_tokens,
-                        temperature=max(0.7, temperature),
-                        do_sample=True
+                    start_time = time.time()
+                    
+                    # シンプルNPUデコード実行
+                    generated_only = self.simple_npu_decoder.decode_with_npu(
+                        prompt, 
+                        max_tokens=actual_max_new_tokens
                     )
                     
-                    if "error" not in npu_result:
-                        print("✅ NPU統合デコード成功")
-                        
-                        # NPU結果を標準形式に変換
-                        generated_text = npu_result["generated_text"]
-                        generated_only = npu_result["new_text"]
-                        generation_time = npu_result["generation_time"]
-                        
-                        # 統計情報
-                        input_tokens = npu_result["input_tokens"]
-                        output_tokens = npu_result["output_tokens"]
-                        tokens_per_sec = npu_result["tokens_per_sec"]
-                        
-                        # NPU性能レポート
-                        npu_report = self.npu_decode_integrator.get_performance_report()
-                        
-                        return {
-                            "generated_text": generated_text,
-                            "prompt": prompt,
-                            "generation_time": generation_time,
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
-                            "tokens_per_sec": tokens_per_sec,
-                            "npu_utilization": npu_result["npu_utilization"],
-                            "npu_performance": npu_report,
-                            "method": "NPU統合デコード"
-                        }
-                    else:
-                        print(f"⚠️ NPU統合デコード失敗: {npu_result['error']}")
-                        print("💡 CPUフォールバックに切り替えます")
+                    generation_time = time.time() - start_time
+                    generated_text = prompt + generated_only
+                    
+                    # 統計情報
+                    input_tokens = len(self.tokenizer.encode(prompt))
+                    output_tokens = len(self.tokenizer.encode(generated_only))
+                    tokens_per_sec = output_tokens / generation_time if generation_time > 0 else 0
+                    
+                    # NPU状態取得
+                    npu_status = self.simple_npu_decoder.get_npu_status()
+                    
+                    print("✅ シンプルNPUデコード成功")
+                    
+                    return {
+                        "generated_text": generated_text,
+                        "prompt": prompt,
+                        "generation_time": generation_time,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                        "tokens_per_sec": tokens_per_sec,
+                        "npu_utilization": npu_status["npu_utilization"],
+                        "npu_performance": npu_status,
+                        "method": "シンプルNPUデコード"
+                    }
                         
                 except Exception as e:
-                    print(f"⚠️ NPU統合デコードエラー: {e}")
+                    print(f"⚠️ シンプルNPUデコードエラー: {e}")
                     print("💡 CPUフォールバックに切り替えます")
                     import traceback
                     traceback.print_exc()  # デバッグ用
@@ -1064,34 +1059,30 @@ def main():
         traceback.print_exc()
 
 def _setup_npu_decode_integration(demo):
-    """NPU Decode統合セットアップ"""
+    """シンプルNPUデコード統合セットアップ（グローバル関数）"""
     try:
-        print("🔄 NPU Decode統合セットアップ中...")
+        print("🔄 シンプルNPU Decode統合セットアップ中...")
         
-        if not NPU_DECODE_INTEGRATION_AVAILABLE:
-            print("⚠️ NPU Decode統合システム未利用可能")
-            return
+        # シンプルNPUデコーダーを使用
+        from simple_npu_decode import SimpleNPUDecoder
+        demo.simple_npu_decoder = SimpleNPUDecoder(demo.model, demo.tokenizer)
         
-        # NPU Decode統合システム初期化
-        demo.npu_decode_integrator = NPUDecodeIntegrator(
-            demo.model, 
-            demo.tokenizer
-        )
-        
-        # NPU初期化
-        npu_success = demo.npu_decode_integrator.initialize_npu()
-        
-        if npu_success:
+        npu_status = demo.simple_npu_decoder.get_npu_status()
+        if npu_status["npu_available"]:
             demo.npu_decode_available = True
-            print("✅ NPU Decode統合セットアップ完了")
-            print("⚡ 真のNPU統合デコードが利用可能になりました")
+            print("✅ シンプルNPUデコード統合セットアップ完了")
+            print("⚡ シンプルNPUデコーダーが利用可能になりました")
+            print(f"  📊 NPU利用率: {npu_status['npu_utilization']:.1f}%")
+            print(f"  🔧 処理モード: {npu_status['processing_mode']}")
         else:
-            print("⚠️ NPU Decode統合セットアップ失敗、CPUフォールバック")
+            print("⚠️ シンプルNPUデコード初期化失敗、CPUフォールバック")
             demo.npu_decode_available = False
+            demo.simple_npu_decoder = None
             
     except Exception as e:
-        print(f"⚠️ NPU Decode統合セットアップエラー: {e}")
+        print(f"⚠️ シンプルNPUデコード統合セットアップエラー: {e}")
         demo.npu_decode_available = False
+        demo.simple_npu_decoder = None
 
 def _setup_npu_inference(demo):
     """NPU推論セットアップ（グローバル関数）"""
