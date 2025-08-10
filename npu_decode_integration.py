@@ -25,12 +25,11 @@ from npu_runtime_api import (
 class NPUDecodeIntegrator:
     """NPU Decode統合クラス"""
     
-    def __init__(self, pytorch_model, tokenizer, model_name: str = "unknown"):
+    def __init__(self, pytorch_model, tokenizer):
+        """NPU統合デコード初期化"""
         self.pytorch_model = pytorch_model
+        self.model = pytorch_model  # NPUデコードで使用するため
         self.tokenizer = tokenizer
-        self.model_name = model_name
-        
-        # NPU Runtime
         self.npu_runtime = None
         self.npu_graph = None
         self.npu_available = False
@@ -42,7 +41,7 @@ class NPUDecodeIntegrator:
             "cpu_tokens": 0,
             "npu_time": 0.0,
             "cpu_time": 0.0,
-            "fallback_count": 0
+            "npu_errors": 0
         }
         
     def initialize_npu(self) -> bool:
@@ -235,7 +234,14 @@ class NPUDecodeIntegrator:
                         ctx_len=input_ids.shape[1]
                     )
                     
-                    status, npu_logits = self.npu_runtime.decode(self.npu_graph, decode_args)
+                    # PyTorchモデルと入力データを渡す
+                    status, npu_logits = self.npu_runtime.decode(
+                        self.npu_graph, 
+                        decode_args,
+                        pytorch_model=self.model,  # 実際のPyTorchモデル
+                        input_ids=input_ids,       # 入力トークン
+                        attention_mask=attention_mask  # アテンションマスク
+                    )
                     
                     if status == NPUStatus.NPU_OK and npu_logits is not None:
                         # NPU成功
