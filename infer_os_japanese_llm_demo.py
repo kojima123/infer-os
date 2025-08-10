@@ -1073,8 +1073,7 @@ def _setup_npu_decode_integration(demo):
         # NPU Decode統合システム初期化
         demo.npu_decode_integrator = NPUDecodeIntegrator(
             demo.model, 
-            demo.tokenizer, 
-            demo.model_name
+            demo.tokenizer
         )
         
         # NPU初期化
