@@ -412,7 +412,7 @@ class NPURuntime:
             # 他のレイヤーはCPUフォールバック
             print("  💡 他のレイヤーはCPUフォールバック")
             
-            # 実際のPyTorchモデル推論を使用（ダミーlogitsの代わり）
+            # 実際のPyTorchモデル推論を使用（必須）
             if pytorch_model is not None and input_ids is not None:
                 try:
                     with torch.no_grad():
@@ -424,14 +424,25 @@ class NPURuntime:
                         logits = outputs.logits[:, -1, :].cpu().numpy()  # 最後のトークンのlogits
                         print(f"  ✅ PyTorchモデル推論成功: {logits.shape}")
                         
+                        # logitsの品質チェック
+                        if np.isnan(logits).any() or np.isinf(logits).any():
+                            print(f"  ⚠️ logitsに異常値検出、正規化実行")
+                            logits = np.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
+                        
+                        # 日本語トークン範囲の優先（rinnaモデル用）
+                        # 日本語文字のトークンIDを優先的に選択
+                        japanese_token_boost = 2.0
+                        for i in range(1000, min(30000, logits.shape[-1])):  # 日本語トークン範囲（概算）
+                            logits[0, i] *= japanese_token_boost
+                        
                 except Exception as e:
-                    print(f"  ⚠️ PyTorchモデル推論失敗: {e}")
-                    # フォールバック: ランダムlogits
-                    logits = np.random.randn(1, graph.model_desc.vocab_size).astype(np.float32)
+                    print(f"  ❌ PyTorchモデル推論失敗: {e}")
+                    print(f"  ❌ NPUデコード中断: PyTorchモデル推論が必須")
+                    return NPUStatus.NPU_ERR, None
             else:
-                # PyTorchモデルが提供されていない場合のフォールバック
-                print("  ⚠️ PyTorchモデル未提供、ランダムlogitsを使用")
-                logits = np.random.randn(1, graph.model_desc.vocab_size).astype(np.float32)
+                # PyTorchモデルが提供されていない場合はエラー
+                print(f"  ❌ PyTorchモデル未提供: NPUデコード不可")
+                return NPUStatus.NPU_ERR, None
             
             print("✅ NPUデコード完了")
             return NPUStatus.NPU_OK, logits

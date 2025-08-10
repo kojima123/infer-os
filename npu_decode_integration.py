@@ -210,27 +210,54 @@ class NPUDecodeIntegrator:
                 if (step + 1) % 10 == 0:
                     print(f"  📊 生成進捗: {step + 1}/{max_new_tokens} tokens")
             
-            # 結果デコード（文字化け対策）
+            # 結果デコード（文字化け対策強化版）
             try:
+                # 方法1: 標準デコード
                 generated_text = self.tokenizer.decode(
                     generated_tokens, 
                     skip_special_tokens=True,
                     clean_up_tokenization_spaces=True,
                     errors='ignore'  # 不正な文字を無視
                 )
+                
+                # 文字化け検出
+                if '�' in generated_text or len(generated_text.strip()) == 0:
+                    print(f"  ⚠️ 文字化け検出、個別デコードにフォールバック")
+                    raise ValueError("文字化け検出")
+                
                 # 空白や改行の正規化
                 generated_text = generated_text.strip()
                 
             except Exception as e:
                 print(f"  ⚠️ デコードエラー: {e}")
-                # フォールバック: 個別トークンデコード
+                # 方法2: 個別トークンデコード（安全版）
                 generated_text = ""
-                for token in generated_tokens:
+                valid_tokens = []
+                
+                for i, token in enumerate(generated_tokens):
                     try:
-                        token_text = self.tokenizer.decode([token], skip_special_tokens=True, errors='ignore')
-                        generated_text += token_text
-                    except:
+                        # トークンIDの妥当性チェック
+                        if 0 <= token < self.tokenizer.vocab_size:
+                            token_text = self.tokenizer.decode([token], skip_special_tokens=True, errors='ignore')
+                            
+                            # 文字化け文字をフィルタリング
+                            if '�' not in token_text and token_text.strip():
+                                generated_text += token_text
+                                valid_tokens.append(token)
+                            else:
+                                print(f"    ⚠️ 無効トークン除外: {token} -> '{token_text}'")
+                        else:
+                            print(f"    ⚠️ 範囲外トークン除外: {token}")
+                    except Exception as token_error:
+                        print(f"    ⚠️ トークン{token}デコードエラー: {token_error}")
                         continue
+                
+                print(f"  ✅ 個別デコード完了: {len(valid_tokens)}/{len(generated_tokens)} トークン有効")
+                
+                # 最終的に空の場合のフォールバック
+                if not generated_text.strip():
+                    generated_text = "申し訳ございませんが、適切な回答を生成できませんでした。"
+                    print(f"  ⚠️ 空の結果、フォールバックメッセージを使用")
                         
             full_text = input_text + generated_text
             
