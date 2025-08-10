@@ -1514,3 +1514,91 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+    def interactive_mode(self):
+        """インタラクティブモード"""
+        print("🎯 インタラクティブモードを開始します")
+        print("💡 'exit'または'quit'で終了、'help'でヘルプ表示")
+        print("=" * 60)
+        
+        while True:
+            try:
+                # ユーザー入力
+                user_input = input("\n🤖 プロンプトを入力してください: ").strip()
+                
+                # 終了コマンド
+                if user_input.lower() in ['exit', 'quit', '終了']:
+                    print("👋 インタラクティブモードを終了します")
+                    break
+                
+                # ヘルプコマンド
+                if user_input.lower() in ['help', 'ヘルプ']:
+                    self._show_interactive_help()
+                    continue
+                
+                # サンプルコマンド
+                if user_input.lower() in ['samples', 'サンプル']:
+                    self._show_prompt_samples()
+                    continue
+                
+                # 空入力チェック
+                if not user_input:
+                    print("⚠️ プロンプトを入力してください")
+                    continue
+                
+                # テキスト生成実行
+                print(f"\n🔄 生成中...")
+                start_time = time.time()
+                
+                result = self.generate_japanese_text(
+                    user_input, 
+                    max_new_tokens=200,
+                    temperature=0.7,
+                    do_sample=True
+                )
+                
+                generation_time = time.time() - start_time
+                
+                # 結果表示
+                print(f"\n✨ 生成結果:")
+                print(f"{'=' * 50}")
+                print(result.get('generated_text', '生成に失敗しました'))
+                print(f"{'=' * 50}")
+                
+                # 統計情報表示
+                if 'output_tokens' in result:
+                    tokens_per_sec = result['output_tokens'] / generation_time if generation_time > 0 else 0
+                    print(f"📊 統計: {result['output_tokens']}トークン, {generation_time:.1f}秒, {tokens_per_sec:.1f}トークン/秒")
+                
+            except KeyboardInterrupt:
+                print(f"\n⚠️ 中断されました。'exit'で終了してください。")
+                continue
+            except Exception as e:
+                print(f"\n❌ エラーが発生しました: {e}")
+                continue
+    
+    def _show_interactive_help(self):
+        """インタラクティブモードのヘルプ表示"""
+        print(f"\n📖 インタラクティブモードヘルプ:")
+        print(f"  • 任意のプロンプトを入力してテキスト生成")
+        print(f"  • 'exit' または 'quit': 終了")
+        print(f"  • 'help' または 'ヘルプ': このヘルプを表示")
+        print(f"  • 'samples' または 'サンプル': プロンプトサンプル表示")
+        print(f"  • Ctrl+C: 生成中断（モード継続）")
+        
+        if self.use_aggressive_memory:
+            print(f"  🚀 積極的メモリ最適化: 有効")
+        if self.use_advanced_quant:
+            print(f"  ⚡ 高度な量子化最適化: 有効")
+        if self.infer_os_enabled:
+            print(f"  🔧 Infer-OS最適化: 有効")
+    
+    def _show_prompt_samples(self):
+        """プロンプトサンプル表示"""
+        print(f"\n💡 プロンプトサンプル:")
+        
+        for category, prompts in JAPANESE_PROMPT_SAMPLES.items():
+            print(f"\n📂 {category}:")
+            for i, prompt in enumerate(prompts, 1):
+                print(f"  {i}. {prompt}")
+
