@@ -28,6 +28,7 @@ import gc
 import time
 import traceback
 import argparse
+import platform
 from typing import Dict, List, Optional, Any
 from infer_os_comparison_benchmark import ComparisonBenchmark, InferOSMode
 import psutil
