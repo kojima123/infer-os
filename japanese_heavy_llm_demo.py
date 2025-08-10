@@ -1289,232 +1289,6 @@ class JapaneseHeavyLLMDemo:
             print(f"  📈 比較ベンチマークで差異を確認")
             print(f"  ⚡ 統合効果の定量的測定を実施")
 
-def main():
-    """メイン実行関数"""
-    parser = argparse.ArgumentParser(description="日本語重量級LLM Infer-OS最適化デモ")
-    
-    # 基本設定
-    parser.add_argument("--model", type=str, default="matsuo-lab/weblab-10b",
-                        help="使用するモデル名")
-    parser.add_argument("--use-4bit", action="store_true",
-                        help="4bit量子化を使用")
-    parser.add_argument("--use-8bit", action="store_true", 
-                        help="8bit量子化を使用")
-    parser.add_argument("--use-advanced-quant", action="store_true",
-                        help="高度な量子化最適化を使用")
-    parser.add_argument("--use-aggressive-memory", action="store_true",
-                        help="積極的メモリ最適化を使用（27.8GB環境対応）")
-    parser.add_argument("--quantization-profile", type=str, default="balanced",
-                        choices=["safe", "balanced", "aggressive"],
-                        help="量子化プロファイル")
-    
-    # ONNX設定
-    parser.add_argument("--convert-to-onnx", action="store_true",
-                        help="ONNXに変換")
-    parser.add_argument("--use-onnx-runtime", action="store_true",
-                        help="ONNX Runtimeを使用")
-    parser.add_argument("--onnx-optimization-level", type=int, default=2,
-                        choices=[0, 1, 2], help="ONNX最適化レベル")
-    
-    # Infer-OS比較設定
-    parser.add_argument("--compare-infer-os", action="store_true", 
-                        help="Infer-OS有り無しの比較ベンチマークを実行")
-    parser.add_argument("--infer-os-enabled", action="store_true", default=True,
-                        help="Infer-OS機能を有効にする（デフォルト: True）")
-    parser.add_argument("--disable-infer-os", action="store_true",
-                        help="Infer-OS機能を無効にする")
-    parser.add_argument("--infer-os-only", action="store_true",
-                        help="Infer-OS有効モードのみで実行（比較なし）")
-    parser.add_argument("--comparison-iterations", type=int, default=5,
-                        help="比較ベンチマークのイテレーション数（デフォルト: 5）")
-    
-    # 実行モード
-    parser.add_argument("--interactive", action="store_true",
-                        help="インタラクティブモードで実行")
-    parser.add_argument("--benchmark", action="store_true", 
-                        help="ベンチマークモードで実行")
-    parser.add_argument("--prompt", type=str,
-                        help="単発プロンプト実行")
-    parser.add_argument("--max-length", type=int, default=300,
-                        help="最大生成長")
-    
-    # 情報表示
-    parser.add_argument("--list-models", action="store_true",
-                        help="対応モデル一覧を表示")
-    parser.add_argument("--samples", action="store_true",
-                        help="日本語プロンプトサンプルを表示")
-    parser.add_argument("--pre-download", action="store_true",
-                        help="事前ダウンロード機能を使用")
-    
-    args = parser.parse_args()
-    
-    # Infer-OS機能の設定
-    if args.infer_os_only:
-        infer_os_enabled = True
-        print("🚀 Infer-OS有効モードのみで実行します")
-    else:
-        infer_os_enabled = args.infer_os_enabled and not args.disable_infer_os
-    
-    # 情報表示オプション
-    if args.list_models:
-        print("\n🇯🇵 対応日本語重量級モデル一覧:")
-        for model_name, info in JAPANESE_HEAVY_MODELS.items():
-            print(f"\n📋 {model_name}")
-            print(f"  パラメータ数: {info['parameters']:,}")
-            print(f"  説明: {info['description']}")
-            print(f"  日本語品質: {info['japanese_quality']}")
-            print(f"  専門分野: {info['speciality']}")
-            print(f"  推奨メモリ: {info['recommended_memory_gb']}GB")
-        return
-    
-    if args.samples:
-        print("\n🇯🇵 日本語プロンプトサンプル:")
-        for category, prompts in JAPANESE_PROMPTS.items():
-            print(f"\n📝 {category}:")
-            for i, prompt in enumerate(prompts, 1):
-                print(f"  {i}. {prompt}")
-        return
-    
-    try:
-        # デモインスタンス作成
-        demo = JapaneseHeavyLLMDemo(
-            model_name=args.model,
-            use_4bit=args.use_4bit,
-            use_8bit=args.use_8bit,
-            use_onnx=args.use_onnx_runtime,
-            onnx_optimization_level=args.onnx_optimization_level,
-            quantization_profile=args.quantization_profile,
-            use_advanced_quant=args.use_advanced_quant,
-            use_aggressive_memory=args.use_aggressive_memory,
-            infer_os_enabled=infer_os_enabled
-        )
-        
-        # Infer-OS統合効果サマリー表示
-        demo.display_infer_os_integration_summary()
-        
-        # Infer-OS有効モードのみ実行
-        if args.infer_os_only:
-            print(f"\n⚡ Infer-OS有効モードで最適化実行中...")
-            print(f"💡 比較ベンチマークをスキップして直接実行します")
-            
-            # 事前ダウンロード
-            if args.pre_download:
-                print(f"\n📥 事前ダウンロード実行中...")
-                if demo.pre_download_model():
-                    print(f"✅ 事前ダウンロード完了")
-                else:
-                    print(f"❌ 事前ダウンロード失敗")
-                    return
-            
-            # モデルロード
-            print(f"\n📥 Infer-OS最適化モデルロード開始...")
-            if not demo.load_model_with_optimization():
-                print(f"❌ モデルロードに失敗しました")
-                return
-            
-            # ONNX変換
-            if args.convert_to_onnx:
-                print(f"\n🚀 ONNX変換実行中...")
-                if demo.convert_to_onnx():
-                    print(f"✅ ONNX変換完了")
-                else:
-                    print(f"❌ ONNX変換失敗")
-            
-            # 実行モード分岐
-            if args.benchmark:
-                print(f"\n📊 Infer-OS最適化ベンチマーク実行中...")
-                results = demo.run_benchmark()
-                print(f"✅ ベンチマーク完了")
-                
-            elif args.prompt:
-                print(f"\n🎯 Infer-OS最適化単発プロンプト実行中...")
-                result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
-                print(f"\n生成結果:")
-                print(f"{result.get('generated_text', '')}")
-                
-            elif args.interactive:
-                print(f"\n🇯🇵 Infer-OS最適化インタラクティブモード開始")
-                demo.interactive_mode()
-                
-            else:
-                print(f"\n💡 Infer-OS有効モード使用方法:")
-                print(f"  --interactive: 最適化インタラクティブモード")
-                print(f"  --benchmark: 最適化ベンチマーク実行")
-                print(f"  --prompt 'テキスト': 最適化単発プロンプト実行")
-            
-            return
-        
-        # Infer-OS比較ベンチマーク実行
-        if args.compare_infer_os:
-            print(f"\n🔥 Infer-OS有り無し比較ベンチマーク実行")
-            comparison_results = demo.run_infer_os_comparison_benchmark(
-                num_iterations=args.comparison_iterations
-            )
-            
-            if comparison_results:
-                print(f"\n✅ 比較ベンチマーク完了")
-                print(f"📊 詳細レポートが生成されました")
-            return
-        
-        # 事前ダウンロード
-        if args.pre_download:
-            print(f"\n📥 事前ダウンロード実行中...")
-            if demo.pre_download_model():
-                print(f"✅ 事前ダウンロード完了")
-            else:
-                print(f"❌ 事前ダウンロード失敗")
-                return
-        
-        # モデルロード
-        print(f"\n📥 モデルロード開始...")
-        if not demo.load_model_with_optimization():
-            print(f"❌ モデルロードに失敗しました")
-            return
-        
-        # ONNX変換
-        if args.convert_to_onnx:
-            print(f"\n🚀 ONNX変換実行中...")
-            if demo.convert_to_onnx():
-                print(f"✅ ONNX変換完了")
-            else:
-                print(f"❌ ONNX変換失敗")
-        
-        # 実行モード分岐
-        if args.benchmark:
-            print(f"\n📊 ベンチマーク実行中...")
-            results = demo.run_benchmark()
-            print(f"✅ ベンチマーク完了")
-            
-        elif args.prompt:
-            print(f"\n🎯 単発プロンプト実行中...")
-            result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
-            print(f"\n生成結果:")
-            print(f"{result.get('generated_text', '')}")
-            
-        elif args.interactive:
-            print(f"\n🇯🇵 インタラクティブモード開始")
-            demo.interactive_mode()
-            
-        else:
-            print(f"\n💡 使用方法:")
-            print(f"  --interactive: インタラクティブモード")
-            print(f"  --benchmark: ベンチマーク実行")
-            print(f"  --compare-infer-os: Infer-OS比較ベンチマーク")
-            print(f"  --infer-os-only: Infer-OS有効モードのみ実行（比較なし）")
-            print(f"  --prompt 'テキスト': 単発プロンプト実行")
-            print(f"  --list-models: モデル一覧表示")
-            print(f"  --samples: プロンプトサンプル表示")
-            
-    except KeyboardInterrupt:
-        print(f"\n⚠️ ユーザーによって中断されました")
-    except Exception as e:
-        print(f"\n❌ エラーが発生しました: {e}")
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    main()
-
-
     def interactive_mode(self):
         """インタラクティブモード"""
         print("🎯 インタラクティブモードを開始します")
@@ -1601,4 +1375,221 @@ if __name__ == "__main__":
             print(f"\n📂 {category}:")
             for i, prompt in enumerate(prompts, 1):
                 print(f"  {i}. {prompt}")
+
+
+def main():
+    """メイン実行関数"""
+    parser = argparse.ArgumentParser(description="日本語重量級LLM Infer-OS最適化デモ")
+    
+    # 基本設定
+    parser.add_argument("--model", type=str, default="matsuo-lab/weblab-10b",
+                        help="使用するモデル名")
+    parser.add_argument("--use-4bit", action="store_true",
+                        help="4bit量子化を使用")
+    parser.add_argument("--use-8bit", action="store_true", 
+                        help="8bit量子化を使用")
+    parser.add_argument("--use-advanced-quant", action="store_true",
+                        help="高度な量子化最適化を使用")
+    parser.add_argument("--use-aggressive-memory", action="store_true",
+                        help="積極的メモリ最適化を使用（27.8GB環境対応）")
+    parser.add_argument("--quantization-profile", type=str, default="balanced",
+                        choices=["safe", "balanced", "aggressive"],
+                        help="量子化プロファイル")
+    
+    # ONNX設定
+    parser.add_argument("--convert-to-onnx", action="store_true",
+                        help="ONNXに変換")
+    parser.add_argument("--use-onnx-runtime", action="store_true",
+                        help="ONNX Runtimeを使用")
+    parser.add_argument("--onnx-optimization-level", type=int, default=2,
+                        choices=[0, 1, 2],
+                        help="ONNX最適化レベル")
+    
+    # 実行モード
+    parser.add_argument("--interactive", action="store_true",
+                        help="インタラクティブモード")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="ベンチマーク実行")
+    parser.add_argument("--compare-infer-os", action="store_true",
+                        help="Infer-OS有り無し比較ベンチマーク")
+    parser.add_argument("--infer-os-only", action="store_true",
+                        help="Infer-OS有効モードのみ実行（比較なし）")
+    parser.add_argument("--comparison-iterations", type=int, default=3,
+                        help="比較ベンチマークの反復回数")
+    
+    # プロンプト設定
+    parser.add_argument("--prompt", type=str,
+                        help="単発プロンプト実行")
+    parser.add_argument("--max-length", type=int, default=200,
+                        help="最大生成長")
+    
+    # その他
+    parser.add_argument("--pre-download", action="store_true",
+                        help="事前ダウンロード実行")
+    parser.add_argument("--list-models", action="store_true",
+                        help="利用可能モデル一覧表示")
+    parser.add_argument("--samples", action="store_true",
+                        help="プロンプトサンプル表示")
+    
+    args = parser.parse_args()
+    
+    # モデル一覧表示
+    if args.list_models:
+        print("🤖 利用可能な日本語重量級モデル:")
+        models = [
+            "matsuo-lab/weblab-10b",
+            "rinna/youri-7b-chat", 
+            "rinna/japanese-gpt-neox-3.6b",
+            "cyberagent/open-calm-7b",
+            "stabilityai/japanese-stablelm-base-alpha-7b"
+        ]
+        for i, model in enumerate(models, 1):
+            print(f"  {i}. {model}")
+        return
+    
+    # プロンプトサンプル表示
+    if args.samples:
+        print("💡 日本語プロンプトサンプル:")
+        for category, prompts in JAPANESE_PROMPT_SAMPLES.items():
+            print(f"\n📂 {category}:")
+            for i, prompt in enumerate(prompts, 1):
+                print(f"  {i}. {prompt}")
+        return
+    
+    try:
+        # Infer-OS有効モードのみ実行
+        if args.infer_os_only:
+            print("🚀 Infer-OS有効モードのみで実行します")
+            infer_os_enabled = True
+        else:
+            infer_os_enabled = True  # デフォルトで有効
+        
+        # デモインスタンス作成
+        demo = JapaneseHeavyLLMDemo(
+            model_name=args.model,
+            use_4bit=args.use_4bit,
+            use_8bit=args.use_8bit,
+            use_onnx=args.use_onnx_runtime,
+            onnx_optimization_level=args.onnx_optimization_level,
+            quantization_profile=args.quantization_profile,
+            use_advanced_quant=args.use_advanced_quant,
+            use_aggressive_memory=args.use_aggressive_memory,
+            infer_os_enabled=infer_os_enabled
+        )
+        
+        # Infer-OS統合効果サマリー表示
+        demo.display_infer_os_integration_summary()
+        
+        # Infer-OS有効モードのみの場合
+        if args.infer_os_only:
+            print("⚡ Infer-OS有効モードで最適化実行中...")
+            print("💡 比較ベンチマークをスキップして直接実行します")
+            
+            # モデルロード
+            print("\n📥 Infer-OS最適化モデルロード開始...")
+            if not demo.load_model_with_optimization():
+                print("❌ モデルロードに失敗しました")
+                return
+            
+            # ONNX変換
+            if args.convert_to_onnx:
+                print("\n🚀 ONNX変換実行中...")
+                if demo.convert_to_onnx():
+                    print("✅ ONNX変換完了")
+                else:
+                    print("❌ ONNX変換失敗")
+            
+            # 実行モード分岐
+            if args.benchmark:
+                print("\n📊 Infer-OS最適化ベンチマーク実行中...")
+                results = demo.run_benchmark()
+                print("✅ ベンチマーク完了")
+                
+            elif args.prompt:
+                print("\n🎯 Infer-OS最適化単発プロンプト実行中...")
+                result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
+                print("\n生成結果:")
+                print(result.get('generated_text', ''))
+                
+            elif args.interactive:
+                print("\n🇯🇵 Infer-OS最適化インタラクティブモード開始")
+                demo.interactive_mode()
+                
+            else:
+                print("\n💡 Infer-OS有効モード使用方法:")
+                print("  --interactive: 最適化インタラクティブモード")
+                print("  --benchmark: 最適化ベンチマーク実行")
+                print("  --prompt 'テキスト': 最適化単発プロンプト実行")
+            
+            return
+        
+        # Infer-OS比較ベンチマーク実行
+        if args.compare_infer_os:
+            print("\n🔥 Infer-OS有り無し比較ベンチマーク実行")
+            comparison_results = demo.run_infer_os_comparison_benchmark(
+                num_iterations=args.comparison_iterations
+            )
+            
+            if comparison_results:
+                print("\n✅ 比較ベンチマーク完了")
+                print("📊 詳細レポートが生成されました")
+            return
+        
+        # 事前ダウンロード
+        if args.pre_download:
+            print("\n📥 事前ダウンロード実行中...")
+            if demo.pre_download_model():
+                print("✅ 事前ダウンロード完了")
+            else:
+                print("❌ 事前ダウンロード失敗")
+                return
+        
+        # モデルロード
+        print("\n📥 モデルロード開始...")
+        if not demo.load_model_with_optimization():
+            print("❌ モデルロードに失敗しました")
+            return
+        
+        # ONNX変換
+        if args.convert_to_onnx:
+            print("\n🚀 ONNX変換実行中...")
+            if demo.convert_to_onnx():
+                print("✅ ONNX変換完了")
+            else:
+                print("❌ ONNX変換失敗")
+        
+        # 実行モード分岐
+        if args.benchmark:
+            print("\n📊 ベンチマーク実行中...")
+            results = demo.run_benchmark()
+            print("✅ ベンチマーク完了")
+            
+        elif args.prompt:
+            print("\n🎯 単発プロンプト実行中...")
+            result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
+            print("\n生成結果:")
+            print(result.get('generated_text', ''))
+            
+        elif args.interactive:
+            print("\n🇯🇵 インタラクティブモード開始")
+            demo.interactive_mode()
+            
+        else:
+            print("\n💡 使用方法:")
+            print("  --interactive: インタラクティブモード")
+            print("  --benchmark: ベンチマーク実行")
+            print("  --compare-infer-os: Infer-OS比較ベンチマーク")
+            print("  --infer-os-only: Infer-OS有効モードのみ実行（比較なし）")
+            print("  --prompt 'テキスト': 単発プロンプト実行")
+            print("  --list-models: モデル一覧表示")
+            print("  --samples: プロンプトサンプル表示")
+            
+    except KeyboardInterrupt:
+        print("\n⚠️ ユーザーによって中断されました")
+    except Exception as e:
+        print(f"\n❌ エラーが発生しました: {e}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
 
