@@ -53,7 +53,7 @@ class SimpleNPUDecoder:
             print(f"  📤 出力: {output_info.name} {output_info.shape} {output_info.type}")
             
             # テスト実行
-            test_input = np.random.randn(1, 4096).astype(np.float32)
+            test_input = np.random.randn(1, 512).astype(np.float32)  # 512次元に修正
             test_result = self.npu_session.run(['output'], {'input': test_input})
             print(f"  🧪 テスト実行成功: 出力形状 {test_result[0].shape}")
             
