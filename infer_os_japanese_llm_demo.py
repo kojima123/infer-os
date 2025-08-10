@@ -139,7 +139,15 @@ JAPANESE_PROMPT_SAMPLES = {
     ]
 }
 
-class InferOSJapaneseLLMDemo:
+# NPU統合システム
+try:
+    from npu_decode_integration import NPUDecodeIntegrator
+    NPU_DECODE_INTEGRATION_AVAILABLE = True
+except ImportError:
+    NPU_DECODE_INTEGRATION_AVAILABLE = False
+    print("⚠️ NPU Decode統合システム未利用可能")
+
+class JapaneseHeavyLLMDemo:
     """Infer-OS日本語重量級LLM統合デモクラス"""
     
     def __init__(self, model_name: str = "rinna/youri-7b-chat", 
@@ -220,7 +228,11 @@ class InferOSJapaneseLLMDemo:
         else:
             self.npu_optimizer = None
         
-        # システム情報を取得・保存
+        # NPU統合システム
+        self.npu_decode_integrator = None
+        self.npu_decode_available = False
+        
+        # システム情報取得・保存
         self.system_info = self._get_system_info()
         
         self._print_system_info()
@@ -352,7 +364,7 @@ class InferOSJapaneseLLMDemo:
                     # NPU推論セットアップ
                     if self.npu_optimizer and self.npu_optimizer.npu_available:
                         print("🚀 NPU推論セットアップ開始...")
-                        _setup_npu_inference(self)
+                        _setup_npu_decode_integration(self)
                     
                     return True
                 else:
@@ -509,6 +521,56 @@ class InferOSJapaneseLLMDemo:
                 "no_repeat_ngram_size": 3,
                 "length_penalty": 1.0,
             }
+            
+            # NPU統合デコード優先実行
+            if self.npu_decode_available and self.npu_decode_integrator:
+                print("⚡ NPU統合デコードを使用中...")
+                try:
+                    npu_result = self.npu_decode_integrator.generate_with_npu_decode(
+                        prompt,
+                        max_new_tokens=actual_max_new_tokens,
+                        temperature=max(0.7, temperature),
+                        do_sample=True
+                    )
+                    
+                    if "error" not in npu_result:
+                        print("✅ NPU統合デコード成功")
+                        
+                        # NPU結果を標準形式に変換
+                        generated_text = npu_result["generated_text"]
+                        generated_only = npu_result["new_text"]
+                        generation_time = npu_result["generation_time"]
+                        
+                        # 統計情報
+                        input_tokens = npu_result["input_tokens"]
+                        output_tokens = npu_result["output_tokens"]
+                        tokens_per_sec = npu_result["tokens_per_sec"]
+                        
+                        # NPU性能レポート
+                        npu_report = self.npu_decode_integrator.get_performance_report()
+                        
+                        return {
+                            "generated_text": generated_text,
+                            "prompt": prompt,
+                            "generation_time": generation_time,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                            "tokens_per_sec": tokens_per_sec,
+                            "npu_utilization": npu_result["npu_utilization"],
+                            "npu_performance": npu_report,
+                            "method": "NPU統合デコード"
+                        }
+                    else:
+                        print(f"⚠️ NPU統合デコード失敗: {npu_result['error']}")
+                        print("💡 CPUフォールバックに切り替えます")
+                        
+                except Exception as e:
+                    print(f"⚠️ NPU統合デコードエラー: {e}")
+                    print("💡 CPUフォールバックに切り替えます")
+            
+            # CPUフォールバック実行
+            print("🖥️ CPU推論を使用中...")
             
             # 生成実行（時間・リソース測定）
             start_time = time.time()
@@ -998,6 +1060,37 @@ def main():
     except Exception as e:
         print(f"\n❌ エラーが発生しました: {e}")
         traceback.print_exc()
+
+def _setup_npu_decode_integration(demo):
+    """NPU Decode統合セットアップ"""
+    try:
+        print("🔄 NPU Decode統合セットアップ中...")
+        
+        if not NPU_DECODE_INTEGRATION_AVAILABLE:
+            print("⚠️ NPU Decode統合システム未利用可能")
+            return
+        
+        # NPU Decode統合システム初期化
+        demo.npu_decode_integrator = NPUDecodeIntegrator(
+            demo.model, 
+            demo.tokenizer, 
+            demo.model_name
+        )
+        
+        # NPU初期化
+        npu_success = demo.npu_decode_integrator.initialize_npu()
+        
+        if npu_success:
+            demo.npu_decode_available = True
+            print("✅ NPU Decode統合セットアップ完了")
+            print("⚡ 真のNPU統合デコードが利用可能になりました")
+        else:
+            print("⚠️ NPU Decode統合セットアップ失敗、CPUフォールバック")
+            demo.npu_decode_available = False
+            
+    except Exception as e:
+        print(f"⚠️ NPU Decode統合セットアップエラー: {e}")
+        demo.npu_decode_available = False
 
 def _setup_npu_inference(demo):
     """NPU推論セットアップ（グローバル関数）"""
