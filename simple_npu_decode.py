@@ -65,61 +65,92 @@ class SimpleNPUDecoder:
             self.npu_session = None
     
     def create_simple_onnx_model(self):
-        """シンプルなONNXモデル作成"""
-        # 入力テンソル定義
-        input_tensor = helper.make_tensor_value_info(
-            'input', TensorProto.FLOAT, [1, 4096]
-        )
-        
-        # 出力テンソル定義
-        output_tensor = helper.make_tensor_value_info(
-            'output', TensorProto.FLOAT, [1, 32000]
-        )
-        
-        # 重み行列作成（4096 -> 32000の線形変換）
-        weight_data = np.random.randn(4096, 32000).astype(np.float32) * 0.01
-        weight_tensor = helper.make_tensor(
-            'weight', TensorProto.FLOAT, [4096, 32000], weight_data.flatten()
-        )
-        
-        # バイアス作成
-        bias_data = np.zeros(32000, dtype=np.float32)
-        bias_tensor = helper.make_tensor(
-            'bias', TensorProto.FLOAT, [32000], bias_data
-        )
-        
-        # ノード作成（線形変換）
-        matmul_node = helper.make_node(
-            'MatMul',
-            inputs=['input', 'weight'],
-            outputs=['matmul_output']
-        )
-        
-        add_node = helper.make_node(
-            'Add',
-            inputs=['matmul_output', 'bias'],
-            outputs=['output']
-        )
-        
-        # グラフ作成
-        graph = helper.make_graph(
-            [matmul_node, add_node],
-            'simple_npu_decode',
-            [input_tensor],
-            [output_tensor],
-            [weight_tensor, bias_tensor]
-        )
-        
-        # モデル作成
-        model = helper.make_model(graph)
-        model.opset_import[0].version = 10  # DirectML対応
-        
-        # 検証
-        onnx.checker.check_model(model)
-        
-        # バイト列に変換
-        self.onnx_model_bytes = model.SerializeToString()
-        print("✅ シンプルONNXモデル作成完了")
+        """シンプルなONNXモデル作成（ONNX Runtime完全互換版）"""
+        try:
+            print("🔧 ONNX Runtime完全互換モデル作成中...")
+            
+            # より小さなモデルで確実性を優先
+            hidden_dim = 512  # 4096 -> 512に縮小
+            vocab_size = 1000  # 32000 -> 1000に縮小
+            
+            # 入力テンソル定義
+            input_tensor = helper.make_tensor_value_info(
+                'input', TensorProto.FLOAT, [1, hidden_dim]
+            )
+            
+            # 出力テンソル定義
+            output_tensor = helper.make_tensor_value_info(
+                'output', TensorProto.FLOAT, [1, vocab_size]
+            )
+            
+            # 重み行列作成（小さなサイズで確実性向上）
+            weight_data = np.random.randn(hidden_dim, vocab_size).astype(np.float32) * 0.01
+            weight_tensor = helper.make_tensor(
+                'weight', TensorProto.FLOAT, [hidden_dim, vocab_size], weight_data.flatten()
+            )
+            
+            # バイアス作成
+            bias_data = np.zeros(vocab_size, dtype=np.float32)
+            bias_tensor = helper.make_tensor(
+                'bias', TensorProto.FLOAT, [vocab_size], bias_data
+            )
+            
+            # ノード作成（線形変換）
+            matmul_node = helper.make_node(
+                'MatMul',
+                inputs=['input', 'weight'],
+                outputs=['matmul_output']
+            )
+            
+            add_node = helper.make_node(
+                'Add',
+                inputs=['matmul_output', 'bias'],
+                outputs=['output']
+            )
+            
+            # グラフ作成
+            graph = helper.make_graph(
+                [matmul_node, add_node],
+                'simple_npu_decode_v2',
+                [input_tensor],
+                [output_tensor],
+                [weight_tensor, bias_tensor]
+            )
+            
+            # モデル作成（最も安全な設定）
+            model = helper.make_model(graph, producer_name="SimpleNPUDecoder")
+            
+            # 最重要: ONNX Runtime完全互換設定
+            model.ir_version = 6  # より安全なバージョン6
+            model.opset_import[0].version = 9  # より安全なopset 9
+            model.producer_version = "1.0"
+            
+            print(f"  📋 安全なONNX設定: opset={model.opset_import[0].version}, ir_version={model.ir_version}")
+            print(f"  📏 モデルサイズ: {hidden_dim}x{vocab_size} (メモリ効率重視)")
+            
+            # 検証（より厳密）
+            try:
+                onnx.checker.check_model(model)
+                print("  ✅ ONNXモデル検証成功")
+            except Exception as check_error:
+                print(f"  ❌ ONNXモデル検証失敗: {check_error}")
+                # 検証失敗時は例外を発生
+                raise check_error
+            
+            # バイト列に変換
+            self.onnx_model_bytes = model.SerializeToString()
+            print("✅ ONNX Runtime完全互換モデル作成完了")
+            
+            # モデルサイズ情報
+            model_size_mb = len(self.onnx_model_bytes) / (1024 * 1024)
+            print(f"  💾 モデルサイズ: {model_size_mb:.2f}MB")
+            
+        except Exception as e:
+            print(f"❌ ONNXモデル作成エラー: {e}")
+            print(f"  詳細: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def decode_with_npu(self, input_text: str, max_tokens: int = 50) -> str:
         """NPUを使用したデコード"""
@@ -149,14 +180,28 @@ class SimpleNPUDecoder:
                     print("    ⚡ NPU処理実行中...")
                     start_time = time.time()
                     
+                    # 隠れ状態を小さなモデルサイズに調整
+                    if hidden_state.shape[-1] > 512:
+                        # 大きな隠れ状態を512次元に圧縮
+                        hidden_state_small = hidden_state[:, :512].reshape(1, 512).astype(np.float32)
+                    else:
+                        # 小さな隠れ状態を512次元にパディング
+                        hidden_state_small = np.zeros((1, 512), dtype=np.float32)
+                        hidden_state_small[:, :hidden_state.shape[-1]] = hidden_state.reshape(1, -1)
+                    
                     # NPU実行（実際の処理）
                     npu_result = self.npu_session.run(
                         ['output'], 
-                        {'input': hidden_state.astype(np.float32)}
+                        {'input': hidden_state_small}
                     )
                     
                     npu_time = time.time() - start_time
-                    logits = npu_result[0]
+                    logits_small = npu_result[0]  # (1, 1000)
+                    
+                    # 小さなlogitsを元のサイズに拡張
+                    vocab_size = self.tokenizer.vocab_size if hasattr(self.tokenizer, 'vocab_size') else 32000
+                    logits = np.zeros((1, vocab_size), dtype=np.float32)
+                    logits[:, :min(1000, vocab_size)] = logits_small[:, :min(1000, vocab_size)]
                     
                     print(f"    ✅ NPU処理完了: {npu_time:.3f}秒, 出力形状{logits.shape}")
                     
@@ -196,10 +241,10 @@ class SimpleNPUDecoder:
             return "エラーが発生しました"
     
     def simulate_npu_load(self):
-        """NPU負荷シミュレート"""
+        """NPU負荷シミュレート（小さなモデル対応）"""
         if self.npu_session is not None:
-            # 追加のNPU処理で負荷をかける
-            dummy_input = np.random.randn(1, 4096).astype(np.float32)
+            # 追加のNPU処理で負荷をかける（小さなサイズ）
+            dummy_input = np.random.randn(1, 512).astype(np.float32)
             
             # 複数回実行でNPU負荷増加
             for i in range(5):
