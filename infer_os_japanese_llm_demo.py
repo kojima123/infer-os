@@ -1004,7 +1004,7 @@ def main():
             infer_os_enabled = True  # デフォルトで有効
         
         # デモインスタンス作成
-        demo = InferOSJapaneseLLMDemo(
+        demo = JapaneseHeavyLLMDemo(
             model_name=args.model,
             use_4bit=args.use_4bit,
             use_8bit=args.use_8bit,
