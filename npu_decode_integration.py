@@ -157,10 +157,35 @@ class NPUDecodeIntegrator:
                     print("❌ デコードステップ失敗")
                     break
                 
-                # 次トークン選択
+                # 次トークン選択（改善版）
                 if do_sample and temperature > 0:
-                    # 温度サンプリング
-                    probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                    # 温度サンプリング（改善版）
+                    # 温度を適度に制限
+                    effective_temperature = min(max(temperature, 0.3), 1.0)
+                    
+                    # logitsの正規化
+                    logits = next_token_logits.float()
+                    
+                    # top_k フィルタリング
+                    top_k = 50
+                    if top_k > 0:
+                        top_k_logits, top_k_indices = torch.topk(logits, min(top_k, logits.size(-1)))
+                        logits = torch.full_like(logits, float('-inf'))
+                        logits.scatter_(-1, top_k_indices, top_k_logits)
+                    
+                    # top_p フィルタリング
+                    top_p = 0.9
+                    if top_p < 1.0:
+                        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                        sorted_indices_to_remove = cumulative_probs > top_p
+                        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                        sorted_indices_to_remove[..., 0] = 0
+                        indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+                        logits[indices_to_remove] = float('-inf')
+                    
+                    # 温度適用とサンプリング
+                    probs = torch.softmax(logits / effective_temperature, dim=-1)
                     next_token = torch.multinomial(probs, num_samples=1)
                 else:
                     # Greedy選択
@@ -185,8 +210,28 @@ class NPUDecodeIntegrator:
                 if (step + 1) % 10 == 0:
                     print(f"  📊 生成進捗: {step + 1}/{max_new_tokens} tokens")
             
-            # 結果デコード
-            generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            # 結果デコード（文字化け対策）
+            try:
+                generated_text = self.tokenizer.decode(
+                    generated_tokens, 
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True,
+                    errors='ignore'  # 不正な文字を無視
+                )
+                # 空白や改行の正規化
+                generated_text = generated_text.strip()
+                
+            except Exception as e:
+                print(f"  ⚠️ デコードエラー: {e}")
+                # フォールバック: 個別トークンデコード
+                generated_text = ""
+                for token in generated_tokens:
+                    try:
+                        token_text = self.tokenizer.decode([token], skip_special_tokens=True, errors='ignore')
+                        generated_text += token_text
+                    except:
+                        continue
+                        
             full_text = input_text + generated_text
             
             # 統計情報更新
