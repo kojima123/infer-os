@@ -41,7 +41,8 @@ class NPUDecodeIntegrator:
             "cpu_tokens": 0,
             "npu_time": 0.0,
             "cpu_time": 0.0,
-            "npu_errors": 0
+            "npu_errors": 0,
+            "fallback_count": 0
         }
         
     def initialize_npu(self) -> bool:
