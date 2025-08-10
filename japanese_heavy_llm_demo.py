@@ -779,7 +779,8 @@ class JapaneseHeavyLLMDemo:
         except Exception as e:
             print(f"⚠️ 日本語最適化エラー: {e}")
     
-    def generate_japanese_text(self, prompt: str, max_length: int = 300, max_new_tokens: int = None) -> Dict:
+    def generate_japanese_text(self, prompt: str, max_length: int = 300, max_new_tokens: int = None, 
+                              temperature: float = 0.7, do_sample: bool = True) -> Dict:
         """日本語テキスト生成（最適化版）"""
         if self.model is None or self.tokenizer is None:
             return {"error": "モデルまたはトークナイザーが未ロード"}
@@ -810,11 +811,10 @@ class JapaneseHeavyLLMDemo:
             
             # 生成設定（日本語最適化）
             generation_config = {
-                "max_new_tokens": actual_max_new_tokens,  # 適切なmax_new_tokensを使用
-                "min_new_tokens": 10,  # 最小生成トークン数を設定
-                "num_return_sequences": 1,
-                "temperature": 0.8,  # 温度を少し上げて多様性向上
-                "do_sample": True,
+                "max_length": max_length,
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,  # パラメータから取得
+                "do_sample": do_sample,      # パラメータから取得
                 "top_p": 0.9,
                 "top_k": 50,
                 "repetition_penalty": 1.2,  # 繰り返し抑制を強化
