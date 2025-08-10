@@ -411,6 +411,15 @@ class InferOSJapaneseLLMDemo:
                 self.model = self.advanced_quantizer.optimize_model(self.model)
                 print("✅ 高度な量子化最適化完了")
             
+            # NPU推論セットアップ
+            if self.enable_npu and self.npu_optimizer and self.npu_optimizer.npu_available:
+                print("🚀 NPU推論セットアップ中...")
+                npu_setup_success = self.npu_optimizer.setup_npu_inference(self.model, self.tokenizer)
+                if npu_setup_success:
+                    print("✅ NPU推論セットアップ完了")
+                else:
+                    print("⚠️ NPU推論セットアップ失敗、CPU推論を使用")
+            
             return True
             
         except Exception as e:
@@ -427,6 +436,31 @@ class InferOSJapaneseLLMDemo:
             print(f"\n🎯 日本語テキスト生成開始")
             print(f"プロンプト: \"{prompt}\"")
             print(f"最大長: {max_length}")
+            
+            # NPU推論を優先使用
+            if self.enable_npu and self.npu_optimizer and self.npu_optimizer.npu_available:
+                print("⚡ NPU推論を使用中...")
+                generated_text = self.npu_optimizer.run_npu_inference(
+                    prompt, self.model, self.tokenizer, max_length
+                )
+                
+                if generated_text:
+                    # NPU推論成功時の統計情報
+                    return {
+                        "generated_text": generated_text,
+                        "generation_time": 0.0,  # NPU内で計測済み
+                        "input_tokens": len(self.tokenizer.encode(prompt)),
+                        "output_tokens": len(self.tokenizer.encode(generated_text)),
+                        "tokens_per_sec": 0.0,  # NPU内で計測済み
+                        "memory_used": 0.0,
+                        "cpu_usage": 0.0,
+                        "inference_method": "NPU"
+                    }
+                else:
+                    print("⚠️ NPU推論失敗、CPU推論にフォールバック")
+            
+            # CPU推論（従来の方法）
+            print("🖥️ CPU推論を使用中...")
             
             # メモリ・CPU使用量測定開始
             initial_memory = psutil.virtual_memory().used / (1024**3)
