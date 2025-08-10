@@ -809,19 +809,20 @@ class JapaneseHeavyLLMDemo:
             else:
                 actual_max_new_tokens = max_length
             
-            # 生成設定（日本語最適化）
+            # 生成設定（日本語最適化・長いプロンプト対応）
             generation_config = {
-                "max_length": max_length,
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,  # パラメータから取得
-                "do_sample": do_sample,      # パラメータから取得
-                "top_p": 0.9,
-                "top_k": 50,
-                "repetition_penalty": 1.2,  # 繰り返し抑制を強化
-                "pad_token_id": self.tokenizer.eos_token_id,
+                "max_new_tokens": max_new_tokens,  # max_lengthを削除してmax_new_tokensのみ使用
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "top_p": 0.95,  # より多様な生成を許可
+                "top_k": 40,    # より多様な選択肢
+                "repetition_penalty": 1.1,  # 繰り返し抑制を緩和
+                "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id,
                 "eos_token_id": self.tokenizer.eos_token_id,
                 "use_cache": True,
-                "early_stopping": False,  # 早期停止を無効化
+                "early_stopping": False,
+                "no_repeat_ngram_size": 3,  # 3-gramの繰り返しを防止
+                "length_penalty": 1.0,      # 長さペナルティなし
             }
             
             # 生成実行（時間・リソース測定）
@@ -839,14 +840,52 @@ class JapaneseHeavyLLMDemo:
             end_time = time.time()
             generation_time = end_time - start_time
             
-            # 結果デコード
+            # 結果デコード（改善版）
             generated_text = self.tokenizer.decode(
                 outputs[0],
-                skip_special_tokens=True
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
             )
             
-            # 生成部分のみ抽出
-            generated_only = generated_text[len(prompt):].strip()
+            # 生成部分のみ抽出（改善版）
+            if generated_text.startswith(prompt):
+                generated_only = generated_text[len(prompt):].strip()
+            else:
+                # プロンプトが完全一致しない場合の処理
+                generated_only = generated_text.strip()
+            
+            # 空の結果や「。」のみの場合の対処
+            if not generated_only or generated_only == "。" or len(generated_only) < 3:
+                print("⚠️ 生成結果が短すぎます。再生成を試行します...")
+                
+                # より緩い設定で再生成
+                retry_config = generation_config.copy()
+                retry_config.update({
+                    "temperature": min(temperature + 0.2, 1.0),  # 温度を上げる
+                    "top_p": 0.98,
+                    "repetition_penalty": 1.05,  # さらに緩和
+                    "min_length": input_tokens + 10,  # 最小長を設定
+                })
+                
+                with torch.no_grad():
+                    retry_outputs = self.model.generate(
+                        **model_inputs,
+                        **retry_config
+                    )
+                
+                retry_text = self.tokenizer.decode(
+                    retry_outputs[0],
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                
+                if retry_text.startswith(prompt):
+                    generated_only = retry_text[len(prompt):].strip()
+                else:
+                    generated_only = retry_text.strip()
+                
+                # 再生成後の出力を使用
+                outputs = retry_outputs
             
             # リソース使用量測定終了
             final_memory = psutil.virtual_memory().used / (1024**3)
