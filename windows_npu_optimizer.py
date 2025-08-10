@@ -7,6 +7,7 @@ Windows環境でのNPU（Neural Processing Unit）検出・有効化・最適化
 - Intel NPU対応
 - Qualcomm NPU対応
 - DirectML NPU最適化
+- ONNX Runtime + DirectML統合
 """
 
 import os
@@ -16,8 +17,25 @@ import platform
 import psutil
 import time
 import torch
-from typing import Dict, List, Optional, Tuple
+import numpy as np
+from typing import Dict, List, Optional, Tuple, Any
 import traceback
+
+# ONNX Runtime関連インポート
+try:
+    import onnxruntime as ort
+    ONNX_RUNTIME_AVAILABLE = True
+except ImportError:
+    ONNX_RUNTIME_AVAILABLE = False
+    print("⚠️ ONNX Runtime未インストール - NPU推論機能制限")
+
+# ONNX関連インポート
+try:
+    import onnx
+    ONNX_AVAILABLE = True
+except ImportError:
+    ONNX_AVAILABLE = False
+    print("⚠️ ONNX未インストール - モデル変換機能制限")
 
 class WindowsNPUOptimizer:
     """Windows NPU最適化クラス"""
@@ -422,14 +440,241 @@ class WindowsNPUOptimizer:
             print(f"  ❌ NPU推論テストエラー: {e}")
             return False
     
-    def run_npu_inference(self, input_text: str, model, tokenizer, max_length: int = 200) -> str:
-        """NPU推論実行"""
-        print("⚡ NPU推論実行中...")
+    def convert_model_to_onnx(self, model, tokenizer, model_name: str = "llm_model") -> bool:
+        """PyTorchモデルをONNX形式に変換（NPU推論用）"""
+        print("🔄 PyTorchモデルをONNX形式に変換中...")
         
         try:
-            # 現在はPyTorchモデルを直接使用（将来的にONNX変換予定）
-            # NPU最適化設定を適用
+            import tempfile
+            import onnx
             
+            # 一時ディレクトリでONNXファイル作成
+            temp_dir = tempfile.mkdtemp()
+            onnx_path = os.path.join(temp_dir, f"{model_name}.onnx")
+            
+            # モデルを評価モードに設定
+            model.eval()
+            
+            # サンプル入力作成（日本語テキスト）
+            sample_text = "こんにちは、今日は良い天気ですね。"
+            sample_inputs = tokenizer(
+                sample_text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=128
+            )
+            
+            # 入力仕様定義
+            input_ids = sample_inputs['input_ids']
+            attention_mask = sample_inputs['attention_mask']
+            
+            print(f"  📊 サンプル入力形状: {input_ids.shape}")
+            
+            # ONNX変換実行
+            print("  🔧 ONNX変換実行中...")
+            
+            # 動的軸設定（バッチサイズと系列長を動的に）
+            dynamic_axes = {
+                'input_ids': {0: 'batch_size', 1: 'sequence_length'},
+                'attention_mask': {0: 'batch_size', 1: 'sequence_length'},
+                'logits': {0: 'batch_size', 1: 'sequence_length'}
+            }
+            
+            # ONNX変換（簡略版 - 実際の大規模モデルでは複雑）
+            torch.onnx.export(
+                model,
+                (input_ids, attention_mask),
+                onnx_path,
+                export_params=True,
+                opset_version=14,  # DirectML対応バージョン
+                do_constant_folding=True,
+                input_names=['input_ids', 'attention_mask'],
+                output_names=['logits'],
+                dynamic_axes=dynamic_axes,
+                verbose=False
+            )
+            
+            # ONNX モデル検証
+            print("  ✅ ONNX変換完了、モデル検証中...")
+            onnx_model = onnx.load(onnx_path)
+            onnx.checker.check_model(onnx_model)
+            
+            self.npu_model_path = onnx_path
+            print(f"✅ ONNX変換成功: {onnx_path}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ ONNX変換エラー: {e}")
+            print("💡 大規模モデルのONNX変換は複雑なため、段階的実装が必要")
+            return False
+    
+    def create_directml_session(self) -> bool:
+        """DirectML NPU用ONNX Runtimeセッション作成"""
+        if not hasattr(self, 'npu_model_path') or not self.npu_model_path:
+            print("❌ ONNX変換が完了していません")
+            return False
+        
+        try:
+            print("🚀 DirectML NPU用セッション作成中...")
+            
+            # DirectMLプロバイダー設定
+            providers = [
+                ('DmlExecutionProvider', {
+                    'device_id': 0,  # NPUデバイスID
+                    'enable_dynamic_shapes': True,
+                    'enable_graph_optimization': True,
+                    'enable_memory_pattern': True,
+                    'disable_memory_arena': False,
+                })
+            ]
+            
+            # セッションオプション設定
+            session_options = ort.SessionOptions()
+            session_options.enable_mem_pattern = True
+            session_options.enable_cpu_mem_arena = True
+            session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            
+            # ONNX Runtimeセッション作成
+            self.onnx_session = ort.InferenceSession(
+                self.npu_model_path,
+                sess_options=session_options,
+                providers=providers
+            )
+            
+            # セッション情報表示
+            print(f"  📊 入力: {[input.name for input in self.onnx_session.get_inputs()]}")
+            print(f"  📊 出力: {[output.name for output in self.onnx_session.get_outputs()]}")
+            print(f"  🔧 プロバイダー: {self.onnx_session.get_providers()}")
+            
+            print("✅ DirectML NPU用セッション作成完了")
+            return True
+            
+        except Exception as e:
+            print(f"❌ DirectMLセッション作成エラー: {e}")
+            return False
+    
+    def run_true_npu_inference(self, input_text: str, tokenizer, max_new_tokens: int = 50) -> Dict[str, Any]:
+        """真のNPU推論実行（ONNX Runtime + DirectML）"""
+        if not self.onnx_session:
+            return {"error": "NPU推論セッションが利用できません"}
+        
+        try:
+            print("⚡ 真のNPU推論実行中...")
+            start_time = time.time()
+            
+            # 入力テキストをトークン化
+            inputs = tokenizer(
+                input_text,
+                return_tensors="np",  # NumPy形式でONNX Runtime用
+                padding=True,
+                truncation=True,
+                max_length=512
+            )
+            
+            input_ids = inputs['input_ids'].astype(np.int64)
+            attention_mask = inputs['attention_mask'].astype(np.int64)
+            
+            print(f"  📊 入力形状: input_ids={input_ids.shape}, attention_mask={attention_mask.shape}")
+            
+            # NPU推論実行
+            onnx_inputs = {
+                'input_ids': input_ids,
+                'attention_mask': attention_mask
+            }
+            
+            # DirectML NPUで推論実行
+            inference_start = time.time()
+            outputs = self.onnx_session.run(None, onnx_inputs)
+            inference_time = time.time() - inference_start
+            
+            # 結果処理
+            logits = outputs[0]  # [batch_size, sequence_length, vocab_size]
+            
+            print(f"  📊 出力形状: {logits.shape}")
+            print(f"  ⚡ 真のNPU推論時間: {inference_time:.3f}秒")
+            
+            # 自動回帰生成（簡略版）
+            generated_tokens = []
+            current_input_ids = input_ids
+            
+            for i in range(min(max_new_tokens, 20)):  # 制限付き生成
+                # 現在の入力で推論
+                onnx_inputs = {
+                    'input_ids': current_input_ids,
+                    'attention_mask': np.ones_like(current_input_ids)
+                }
+                
+                outputs = self.onnx_session.run(None, onnx_inputs)
+                logits = outputs[0]
+                
+                # 次のトークン選択
+                last_token_logits = logits[0, -1, :]
+                
+                # 温度サンプリング
+                temperature = 0.7
+                scaled_logits = last_token_logits / temperature
+                exp_logits = np.exp(scaled_logits - np.max(scaled_logits))
+                probabilities = exp_logits / np.sum(exp_logits)
+                
+                # サンプリング
+                next_token_id = np.random.choice(len(probabilities), p=probabilities)
+                
+                # 終了条件チェック
+                if next_token_id == tokenizer.eos_token_id:
+                    break
+                
+                generated_tokens.append(next_token_id)
+                
+                # 次の入力準備
+                current_input_ids = np.concatenate([
+                    current_input_ids,
+                    np.array([[next_token_id]])
+                ], axis=1)
+            
+            # トークンをテキストに変換
+            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            
+            total_time = time.time() - start_time
+            
+            result = {
+                "generated_text": generated_text,
+                "inference_time": inference_time,
+                "total_time": total_time,
+                "input_tokens": input_ids.shape[1],
+                "output_tokens": len(generated_tokens),
+                "tokens_per_sec": len(generated_tokens) / total_time if total_time > 0 else 0,
+                "npu_used": True,
+                "provider": "DirectML NPU (True)",
+                "method": "ONNX Runtime + DirectML"
+            }
+            
+            print(f"✅ 真のNPU推論完了: {result['tokens_per_sec']:.1f} tokens/sec")
+            return result
+            
+        except Exception as e:
+            print(f"❌ 真のNPU推論エラー: {e}")
+            return {"error": f"真のNPU推論エラー: {e}"}
+
+    def run_npu_inference(self, input_text: str, model, tokenizer, max_length: int = 200) -> str:
+        """NPU推論実行（統合版）"""
+        print("⚡ NPU推論実行中...")
+        
+        # 真のNPU推論を優先試行
+        if hasattr(self, 'onnx_session') and self.onnx_session:
+            print("🚀 真のNPU推論（ONNX + DirectML）を使用")
+            result = self.run_true_npu_inference(input_text, tokenizer, max_length)
+            if not result.get('error'):
+                return result.get('generated_text', '')
+            else:
+                print(f"⚠️ 真のNPU推論失敗: {result['error']}")
+        
+        # フォールバック: 従来のPyTorch推論（CPU）
+        print("🔄 PyTorch推論にフォールバック")
+        
+        try:
+            # 現在はPyTorchモデルを直接使用（CPUで実行）
             # 入力テキストをトークン化
             inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True)
             
@@ -449,7 +694,7 @@ class WindowsNPUOptimizer:
                 "early_stopping": False,
             }
             
-            # 推論実行（現在はCPU、将来的にNPU）
+            # 推論実行（現在はCPU）
             start_time = time.time()
             
             with torch.no_grad():

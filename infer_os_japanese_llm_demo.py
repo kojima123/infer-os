@@ -348,6 +348,12 @@ class InferOSJapaneseLLMDemo:
                     self.model = self.aggressive_memory_optimizer.model
                     self.tokenizer = self.aggressive_memory_optimizer.tokenizer
                     print("✅ 積極的メモリ最適化モデルロード完了")
+                    
+                    # NPU推論セットアップ
+                    if self.npu_optimizer and self.npu_optimizer.npu_available:
+                        print("🚀 NPU推論セットアップ開始...")
+                        _setup_npu_inference(self)
+                    
                     return True
                 else:
                     print("⚠️ 積極的メモリ最適化ロードに失敗、通常ロードを試行")
@@ -992,6 +998,44 @@ def main():
     except Exception as e:
         print(f"\n❌ エラーが発生しました: {e}")
         traceback.print_exc()
+
+def _setup_npu_inference(demo):
+    """NPU推論セットアップ（グローバル関数）"""
+    try:
+        print("🔄 ONNX変換とDirectMLセットアップ中...")
+        
+        # ONNX変換実行
+        if hasattr(demo.npu_optimizer, 'convert_model_to_onnx'):
+            print("📦 PyTorchモデルをONNX形式に変換中...")
+            conversion_success = demo.npu_optimizer.convert_model_to_onnx(
+                demo.model, 
+                demo.tokenizer, 
+                f"japanese_llm_{demo.model_name.split('/')[-1]}"
+            )
+            
+            if conversion_success:
+                print("✅ ONNX変換成功")
+                
+                # DirectMLセッション作成
+                if hasattr(demo.npu_optimizer, 'create_directml_session'):
+                    print("🚀 DirectML NPU用セッション作成中...")
+                    session_success = demo.npu_optimizer.create_directml_session()
+                    
+                    if session_success:
+                        print("✅ 真のNPU推論セットアップ完了")
+                        print("⚡ NPU推論が利用可能になりました")
+                    else:
+                        print("⚠️ DirectMLセッション作成失敗、CPU推論を使用")
+                else:
+                    print("⚠️ DirectMLセッション機能が利用できません")
+            else:
+                print("⚠️ ONNX変換失敗、PyTorch推論を使用")
+        else:
+            print("⚠️ ONNX変換機能が利用できません")
+            
+    except Exception as e:
+        print(f"⚠️ NPU推論セットアップエラー: {e}")
+        print("💡 CPU推論にフォールバックします")
 
 if __name__ == "__main__":
     main()
