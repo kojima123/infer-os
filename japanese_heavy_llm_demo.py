@@ -234,6 +234,10 @@ class JapaneseHeavyLLMDemo:
                 self.aggressive_memory_optimizer = None
         else:
             self.aggressive_memory_optimizer = None
+        
+        # システム情報を取得・保存
+        self.system_info = self._get_system_info()
+        
         self._print_system_info()
         self._validate_system_requirements()
     
