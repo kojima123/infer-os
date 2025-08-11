@@ -386,13 +386,36 @@ class VitisAINPUEngine:
                 
                 logits = npu_outputs[0]
                 
-                # トークン選択
+                # トークン選択（改良版）
                 if temperature > 0:
                     logits = logits / temperature
                 
+                # 終了トークンの確率を最初の数ステップで抑制
+                if step < 5:  # 最初の5ステップは終了トークンを抑制
+                    if self.tokenizer.eos_token_id is not None:
+                        logits[0][self.tokenizer.eos_token_id] = -float('inf')
+                
+                # Top-k, Top-p サンプリング
+                # Top-k フィルタリング
+                top_k = 50
+                if top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(torch.from_numpy(logits), top_k, dim=-1)
+                    logits_filtered = torch.full_like(torch.from_numpy(logits), -float('inf'))
+                    logits_filtered.scatter_(-1, top_k_indices, top_k_logits)
+                    logits = logits_filtered.numpy()
+                
+                # Softmax適用
                 exp_logits = np.exp(logits - np.max(logits))
                 probabilities = exp_logits / np.sum(exp_logits)
+                
+                # 確率的サンプリング
                 next_token_id = np.random.choice(len(probabilities[0]), p=probabilities[0])
+                
+                # 日本語トークンの優先（rinnaモデル用）
+                if step == 0:  # 最初のトークンは特に慎重に
+                    # 高確率トークンから選択
+                    top_indices = np.argsort(probabilities[0])[-10:]  # 上位10トークン
+                    next_token_id = np.random.choice(top_indices)
                 
                 generated_tokens.append(next_token_id)
                 
@@ -406,10 +429,13 @@ class VitisAINPUEngine:
                     inputs['input_ids'] = inputs['input_ids'][:, -512:]
                     inputs['attention_mask'] = inputs['attention_mask'][:, -512:]
                 
-                # 終了トークンチェック
-                if next_token_id == self.tokenizer.eos_token_id:
-                    print(f"🔚 終了トークン検出 (ステップ {step+1})")
+                # 終了トークンチェック（改良版）
+                if next_token_id == self.tokenizer.eos_token_id and step >= 5:  # 最低5トークン生成
+                    print(f"🔚 終了トークン検出 (ステップ {step+1}) - 最小トークン数達成")
                     break
+                elif next_token_id == self.tokenizer.eos_token_id and step < 5:
+                    print(f"⚠️ 早期終了トークン検出 (ステップ {step+1}) - 継続")
+                    # 終了トークンを無視して継続
                 
                 # 進捗表示
                 if (step + 1) % 10 == 0:
