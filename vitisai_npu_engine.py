@@ -79,25 +79,29 @@ class VitisAINPUEngine:
         try:
             print("🔧 NPUオーバレイ環境変数設定中...")
             
-            # Ryzen AI インストールパス確認
-            ryzen_ai_path = os.environ.get('RYZEN_AI_INSTALLATION_PATH')
+            # Ryzen AI インストールパス確認（強制的に正しいパス優先）
+            # 正しいパス優先順位で確認
+            priority_paths = [
+                r"C:\Program Files\RyzenAI\1.5",      # 正しいパス（最優先）
+                r"C:\Program Files\RyzenAI\1.5.1",    # 代替パス
+                r"C:\AMD\RyzenAI\1.5",
+                r"C:\AMD\RyzenAI\1.5.1"
+            ]
+            
+            ryzen_ai_path = None
+            for path in priority_paths:
+                if os.path.exists(path):
+                    ryzen_ai_path = path
+                    # 強制的に正しいパスに設定
+                    os.environ['RYZEN_AI_INSTALLATION_PATH'] = path
+                    print(f"✅ Ryzen AIパス強制設定: {path}")
+                    break
+            
             if not ryzen_ai_path:
-                # デフォルトパス試行（正しい順序）
-                default_paths = [
-                    r"C:\Program Files\RyzenAI\1.5",      # 正しいパス（優先）
-                    r"C:\Program Files\RyzenAI\1.5.1",    # 代替パス
-                    r"C:\AMD\RyzenAI\1.5",
-                    r"C:\AMD\RyzenAI\1.5.1"
-                ]
+                # 環境変数から取得（フォールバック）
+                ryzen_ai_path = os.environ.get('RYZEN_AI_INSTALLATION_PATH')
                 
-                for path in default_paths:
-                    if os.path.exists(path):
-                        ryzen_ai_path = path
-                        os.environ['RYZEN_AI_INSTALLATION_PATH'] = path
-                        print(f"✅ Ryzen AIパス設定: {path}")
-                        break
-                
-                if not ryzen_ai_path:
+            if not ryzen_ai_path:
                     print("❌ Ryzen AI インストールパスが見つかりません")
                     return False
             else:
