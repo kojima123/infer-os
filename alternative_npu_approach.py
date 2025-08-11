@@ -91,6 +91,27 @@ class AlternativeNPUEngine:
             
             # 線形層モデル作成
             linear_model = SimpleLinear(hidden_size, vocab_size)
+            
+            # 実モデルの重みをコピー（精度向上）
+            try:
+                if hasattr(self.model, 'lm_head') and hasattr(self.model.lm_head, 'weight'):
+                    print("🔧 実モデルの重みをコピー中...")
+                    with torch.no_grad():
+                        # lm_headの重みをコピー
+                        original_weight = self.model.lm_head.weight.detach().to(torch.float32).cpu()
+                        linear_model.linear.weight.copy_(original_weight)
+                        
+                        # バイアスがある場合はコピー
+                        if hasattr(self.model.lm_head, 'bias') and self.model.lm_head.bias is not None:
+                            original_bias = self.model.lm_head.bias.detach().to(torch.float32).cpu()
+                            linear_model.linear.bias.copy_(original_bias)
+                        
+                        print("✅ 実モデルの重みコピー完了")
+                else:
+                    print("⚠️ lm_headが見つかりません、ランダム初期化を使用")
+            except Exception as e:
+                print(f"⚠️ 重みコピー失敗、ランダム初期化を使用: {e}")
+            
             linear_model.eval()
             
             # ONNX変換
@@ -127,15 +148,17 @@ class AlternativeNPUEngine:
         try:
             print("🚀 部分的NPUセッション作成中...")
             
-            # DirectMLプロバイダー設定
+            # VitisAI優先プロバイダー設定
             providers = [
+                'VitisAIExecutionProvider',  # NPU直行（最優先）
                 ('DmlExecutionProvider', {
                     'device_id': self.device_id,
                     'enable_dynamic_graph_fusion': True,
                     'enable_graph_optimization': True,
                     'disable_memory_arena': False,
                     'memory_limit_mb': 4096,
-                })
+                }),
+                'CPUExecutionProvider'  # フォールバック
             ]
             
             # セッションオプション設定
@@ -237,13 +260,15 @@ class AlternativeNPUEngine:
         try:
             print("🚀 簡易NPUセッション作成中...")
             
-            # DirectMLプロバイダー設定
+            # VitisAI優先プロバイダー設定
             providers = [
+                'VitisAIExecutionProvider',  # NPU直行（最優先）
                 ('DmlExecutionProvider', {
                     'device_id': self.device_id,
                     'enable_dynamic_graph_fusion': True,
                     'enable_graph_optimization': True,
-                })
+                }),
+                'CPUExecutionProvider'  # フォールバック
             ]
             
             # NPUセッション作成
@@ -304,7 +329,7 @@ class AlternativeNPUEngine:
             with torch.no_grad():
                 outputs = self.model(**inputs, output_hidden_states=True)
                 hidden_states = outputs.hidden_states[-1]  # 最後の層の隠れ状態
-                last_hidden = hidden_states[:, -1, :].cpu().numpy()  # 最後のトークンの隠れ状態
+                last_hidden = hidden_states[:, -1, :].cpu().numpy().astype("float32", copy=False)  # dtype修正
             
             print(f"📊 隠れ状態形状: {last_hidden.shape}")
             
