@@ -82,10 +82,11 @@ class VitisAINPUEngine:
             # Ryzen AI インストールパス確認
             ryzen_ai_path = os.environ.get('RYZEN_AI_INSTALLATION_PATH')
             if not ryzen_ai_path:
-                # デフォルトパス試行
+                # デフォルトパス試行（正しい順序）
                 default_paths = [
-                    r"C:\Program Files\RyzenAI\1.5.1",
-                    r"C:\Program Files\RyzenAI\1.5",
+                    r"C:\Program Files\RyzenAI\1.5",      # 正しいパス（優先）
+                    r"C:\Program Files\RyzenAI\1.5.1",    # 代替パス
+                    r"C:\AMD\RyzenAI\1.5",
                     r"C:\AMD\RyzenAI\1.5.1"
                 ]
                 
