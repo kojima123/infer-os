@@ -859,7 +859,7 @@ if __name__ == "__main__":
         print("\\n🚀 次のステップ:")
         print("1. 依存関係インストール: install_dependencies.bat")
         print("2. 修正版実行: python fixed_npu_runner.py --interactive")
-        print("3. 単発テスト: python fixed_npu_runner.py --prompt \\"人参について教えてください。\\"")
+        print("3. 単発テスト: python fixed_npu_runner.py --prompt \"人参について教えてください\"")
         
         print("\\n💡 期待される改善:")
         print("- ✅ modeling_llama_amd不足問題解決")
