@@ -44,9 +44,9 @@ class RyzenAIGPTOSS2BSystem:
     def __init__(self, infer_os_enabled: bool = False):
         self.infer_os_enabled = infer_os_enabled
         
-        # GPT-OSS-2B候補モデル
+        # GPT-OSS-20B候補モデル（正確なモデル名）
         self.model_candidates = [
-            "microsoft/gpt-oss-2b",           # 最優先: GPT-OSS-2B
+            "openai/gpt-oss-20b",             # 最優先: GPT-OSS-20B（正式名称）
             "microsoft/DialoGPT-medium",      # 代替: 対話特化
             "gpt2-medium",                    # 代替: GPT-2 Medium
             "gpt2",                           # フォールバック
@@ -94,14 +94,14 @@ AIアシスタント: """,
             "simple": "{prompt}"
         }
         
-        print("🚀 Ryzen AI NPU対応GPT-OSS-2Bシステム初期化")
-        print(f"🎯 使用予定モデル: GPT-OSS-2B (2Bパラメータ)")
+        print("🚀 Ryzen AI NPU対応GPT-OSS-20Bシステム初期化")
+        print(f"🎯 使用予定モデル: GPT-OSS-20B (20Bパラメータ)")
         print(f"🔧 infer-OS最適化: {'有効' if infer_os_enabled else '無効'}")
-        print(f"🎯 設計方針: GPT-OSS-2B + NPU最適化")
+        print(f"🎯 設計方針: GPT-OSS-20B + NPU最適化")
     
     def select_best_model(self) -> str:
-        """最適なモデルを選択（GPT-OSS-2B優先）"""
-        print("🔍 GPT-OSS-2Bモデル選択中...")
+        """最適なモデルを選択（GPT-OSS-20B優先）"""
+        print("🔍 GPT-OSS-20Bモデル選択中...")
         
         for model_name in self.model_candidates:
             try:
@@ -118,16 +118,16 @@ AIアシスタント: """,
                     self.selected_model = model_name
                     
                     # モデル情報設定
-                    if "gpt-oss-2b" in model_name:
+                    if "gpt-oss-20b" in model_name:
                         self.model_info = {
                             "name": model_name,
-                            "description": "Microsoft GPT-OSS-2B (2Bパラメータ)",
+                            "description": "OpenAI GPT-OSS-20B (20Bパラメータ)",
                             "language": "多言語対応",
-                            "developer": "Microsoft",
-                            "performance": "高性能テキスト生成",
-                            "specialization": "汎用言語理解・生成",
-                            "quality": "高品質",
-                            "parameters": "2B"
+                            "developer": "OpenAI",
+                            "performance": "最高性能テキスト生成",
+                            "specialization": "推論・コード・ツール使用",
+                            "quality": "最高品質",
+                            "parameters": "20B"
                         }
                     elif "DialoGPT" in model_name:
                         self.model_info = {
