@@ -287,7 +287,7 @@ class RyzenAISwallow70BSystem:
                             dim_feedforward=4096,
                             dropout=0.1,
                             batch_first=True
-                        ) for _ in range(12]  # 軽量化: 12層
+                        ) for _ in range(12)]  # 軽量化: 12層
                     )
                     self.layer_norm = nn.LayerNorm(1024)
                     self.output_projection = nn.Linear(1024, 128256)
