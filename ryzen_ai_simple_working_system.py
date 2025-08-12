@@ -307,8 +307,8 @@ class RyzenAISimpleWorkingSystem:
                 provider_options.append({})
                 print("🎯 VitisAI ExecutionProvider利用可能（Ryzen AI NPU）")
             
-            # DML ExecutionProvider（DirectML）
-            if 'DmlExecutionProvider' in ort.get_available_providers():
+            # DML ExecutionProvider（DirectML）- VitisAIと併用不可のため条件分岐
+            if 'VitisAIExecutionProvider' not in providers and 'DmlExecutionProvider' in ort.get_available_providers():
                 providers.append('DmlExecutionProvider')
                 provider_options.append({
                     'device_id': 0,
