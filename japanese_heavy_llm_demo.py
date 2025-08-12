@@ -28,7 +28,6 @@ import gc
 import time
 import traceback
 import argparse
-import platform
 from typing import Dict, List, Optional, Any
 from infer_os_comparison_benchmark import ComparisonBenchmark, InferOSMode
 import psutil
@@ -53,22 +52,6 @@ try:
 except ImportError:
     ADVANCED_QUANT_AVAILABLE = False
     AdvancedQuantizationOptimizer = None
-
-# 積極的メモリ最適化機能のインポート
-try:
-    from aggressive_memory_optimizer import AggressiveMemoryOptimizer
-    AGGRESSIVE_MEMORY_AVAILABLE = True
-except ImportError:
-    AGGRESSIVE_MEMORY_AVAILABLE = False
-    AggressiveMemoryOptimizer = None
-
-# Windows NPU最適化機能のインポート
-try:
-    from windows_npu_optimizer import WindowsNPUOptimizer
-    WINDOWS_NPU_AVAILABLE = True
-except ImportError:
-    WINDOWS_NPU_AVAILABLE = False
-    WindowsNPUOptimizer = None
     QuantizationProfile = None
 
 try:
@@ -193,88 +176,48 @@ JAPANESE_PROMPTS = {
 class JapaneseHeavyLLMDemo:
     """日本語対応最大規模LLMデモクラス"""
     
-    def __init__(self, model_name: str = "matsuo-lab/weblab-10b", 
-                 use_4bit: bool = False, use_8bit: bool = False,
+    def __init__(self, model_name: str, use_4bit: bool = False, use_8bit: bool = False, 
                  use_onnx: bool = False, onnx_optimization_level: int = 2,
                  quantization_profile: str = "balanced", use_advanced_quant: bool = False,
-                 infer_os_enabled: bool = True, use_aggressive_memory: bool = False,
-                 enable_npu: bool = True):
+                 infer_os_enabled: bool = True):
         self.model_name = model_name
         self.use_4bit = use_4bit
         self.use_8bit = use_8bit
         self.use_onnx = use_onnx
         self.onnx_optimization_level = onnx_optimization_level
         self.use_advanced_quant = use_advanced_quant
-        self.use_aggressive_memory = use_aggressive_memory
-        self.enable_npu = enable_npu
-        self.infer_os_enabled = infer_os_enabled
-        
+        self.quantization_profile = quantization_profile
+        self.infer_os_enabled = infer_os_enabled  # Infer-OS機能の有効/無効
         self.model = None
         self.tokenizer = None
+        self.onnx_converter = None
         self.onnx_generator = None
+        self.advanced_quantizer = None
         self.optimization_applied = False
         
-        # 量子化プロファイル設定
-        if use_advanced_quant and ADVANCED_QUANT_AVAILABLE:
-            try:
-                profile_map = {
-                    "safe": QuantizationProfile.SAFE,
-                    "balanced": QuantizationProfile.BALANCED,
-                    "aggressive": QuantizationProfile.AGGRESSIVE
-                }
-                self.quantization_profile = profile_map.get(quantization_profile, QuantizationProfile.BALANCED)
-                self.advanced_quantizer = AdvancedQuantizationOptimizer(
-                    profile=self.quantization_profile
-                )
-            except Exception as e:
-                print(f"⚠️ 高度な量子化最適化初期化エラー: {e}")
-                self.use_advanced_quant = False
-                self.advanced_quantizer = None
-        else:
-            self.quantization_profile = quantization_profile
-            self.advanced_quantizer = None
+        # Infer-OS比較ベンチマーク
+        self.comparison_benchmark = None
         
-        # 積極的メモリ最適化設定
-        if use_aggressive_memory and AGGRESSIVE_MEMORY_AVAILABLE:
-            try:
-                self.aggressive_memory_optimizer = AggressiveMemoryOptimizer(model_name)
-                print("✅ 積極的メモリ最適化機能を初期化しました")
-            except Exception as e:
-                print(f"⚠️ 積極的メモリ最適化初期化エラー: {e}")
-                self.use_aggressive_memory = False
-                self.aggressive_memory_optimizer = None
-        else:
-            self.aggressive_memory_optimizer = None
+        # 高度な量子化最適化器の初期化
+        if self.use_advanced_quant and ADVANCED_QUANT_AVAILABLE:
+            profile_map = {
+                "safe": QuantizationProfile.SAFE,
+                "balanced": QuantizationProfile.BALANCED,
+                "aggressive": QuantizationProfile.AGGRESSIVE
+            }
+            profile = profile_map.get(quantization_profile, QuantizationProfile.BALANCED)
+            self.advanced_quantizer = AdvancedQuantizationOptimizer(model_name, profile)
         
-        # Windows NPU最適化設定
-        if enable_npu and WINDOWS_NPU_AVAILABLE and platform.system() == "Windows":
-            try:
-                self.npu_optimizer = WindowsNPUOptimizer()
-                print("🔍 Windows NPU最適化機能を初期化しました")
-                
-                # NPU検出と有効化
-                npu_info = self.npu_optimizer.detect_npu_hardware()
-                if npu_info["detected"]:
-                    success = self.npu_optimizer.enable_npu_optimization()
-                    if success:
-                        print(f"✅ {npu_info['type']} NPU最適化を有効化しました")
-                    else:
-                        print("⚠️ NPU最適化の有効化に失敗しました")
-                else:
-                    print("⚠️ NPUが検出されませんでした")
-                    # DirectML依存関係のインストールを提案
-                    print("💡 DirectML依存関係をインストールしてNPU対応を改善できます")
-                    
-            except Exception as e:
-                print(f"⚠️ Windows NPU最適化初期化エラー: {e}")
-                self.enable_npu = False
-                self.npu_optimizer = None
-        else:
-            self.npu_optimizer = None
-        
-        # システム情報を取得・保存
+        # システム情報取得
         self.system_info = self._get_system_info()
         
+        print(f"🇯🇵 日本語対応最大規模LLM Infer-OS最適化デモ")
+        print(f"対象モデル: {model_name}")
+        if self.use_onnx:
+            print(f"🚀 ONNX Runtime最適化: 有効")
+        if self.use_advanced_quant:
+            print(f"⚡ 高度な量子化最適化: 有効 ({quantization_profile}プロファイル)")
+        print(f"🔧 Infer-OS機能: {'有効' if infer_os_enabled else '無効'}")
         self._print_system_info()
         self._validate_system_requirements()
     
@@ -592,31 +535,6 @@ class JapaneseHeavyLLMDemo:
             print("📥 日本語対応大規模モデルをロード中...")
             print("⚠️  初回実行時は大容量ダウンロードのため時間がかかります")
             
-            # 積極的メモリ最適化を使用する場合
-            if self.use_aggressive_memory and self.aggressive_memory_optimizer:
-                print("🚀 積極的メモリ最適化でモデルロード中...")
-                model, tokenizer = self.aggressive_memory_optimizer.load_model_with_chunked_loading(
-                    use_4bit=self.use_4bit
-                )
-                
-                if model is not None and tokenizer is not None:
-                    self.model = model
-                    self.tokenizer = tokenizer
-                    self.optimization_applied = True
-                    
-                    # 推論用最適化適用
-                    optimizations = self.aggressive_memory_optimizer.optimize_for_inference(model, tokenizer)
-                    
-                    # 最適化レポート表示
-                    report = self.aggressive_memory_optimizer.get_optimization_report(model, tokenizer)
-                    print(report)
-                    
-                    print("✅ 積極的メモリ最適化モデルロード完了")
-                    return True
-                else:
-                    print("❌ 積極的メモリ最適化失敗 - 従来方式でリトライ")
-                    self.use_aggressive_memory = False
-            
             # システム要件検証と自動最適化
             if not self._validate_system_requirements():
                 print("❌ システム要件を満たしていません")
@@ -816,8 +734,7 @@ class JapaneseHeavyLLMDemo:
         except Exception as e:
             print(f"⚠️ 日本語最適化エラー: {e}")
     
-    def generate_japanese_text(self, prompt: str, max_length: int = 300, max_new_tokens: int = None, 
-                              temperature: float = 0.7, do_sample: bool = True) -> Dict:
+    def generate_japanese_text(self, prompt: str, max_length: int = 300, max_new_tokens: int = None) -> Dict:
         """日本語テキスト生成（最適化版）"""
         if self.model is None or self.tokenizer is None:
             return {"error": "モデルまたはトークナイザーが未ロード"}
@@ -846,20 +763,22 @@ class JapaneseHeavyLLMDemo:
             else:
                 actual_max_new_tokens = max_length
             
-            # 生成設定（日本語最適化・長いプロンプト対応）
+            # 生成設定（日本語最適化）
             generation_config = {
-                "max_new_tokens": max_new_tokens,  # max_lengthを削除してmax_new_tokensのみ使用
-                "temperature": temperature,
-                "do_sample": do_sample,
-                "top_p": 0.95,  # より多様な生成を許可
-                "top_k": 40,    # より多様な選択肢
-                "repetition_penalty": 1.1,  # 繰り返し抑制を緩和
-                "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id,
+                "max_new_tokens": min(actual_max_new_tokens, 200),  # 最大200トークンに制限
+                "min_new_tokens": 5,  # 最小生成トークン数を削減
+                "num_return_sequences": 1,
+                "temperature": 0.7,  # 温度を下げて安定性向上
+                "do_sample": True,
+                "top_p": 0.8,  # top_pを下げて計算量削減
+                "top_k": 30,   # top_kを下げて計算量削減
+                "repetition_penalty": 1.1,  # 繰り返し抑制を軽減
+                "pad_token_id": self.tokenizer.eos_token_id,
                 "eos_token_id": self.tokenizer.eos_token_id,
                 "use_cache": True,
-                "early_stopping": False,
-                "no_repeat_ngram_size": 3,  # 3-gramの繰り返しを防止
-                "length_penalty": 1.0,      # 長さペナルティなし
+                "early_stopping": True,  # 早期停止を有効化
+                "num_beams": 1,  # ビームサーチを無効化（高速化）
+                "length_penalty": 1.0,  # 長さペナルティを無効化
             }
             
             # 生成実行（時間・リソース測定）
@@ -868,61 +787,73 @@ class JapaneseHeavyLLMDemo:
             # token_type_idsエラー回避: 不要なキーを除去
             model_inputs = {k: v for k, v in inputs.items() if k != 'token_type_ids'}
             
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **model_inputs,
-                    **generation_config
-                )
+            # タイムアウト機能付き推論実行
+            import signal
+            
+            def timeout_handler(signum, frame):
+                raise TimeoutError("推論処理がタイムアウトしました（10分制限）")
+            
+            # 10分タイムアウト設定
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(600)  # 10分 = 600秒
+            
+            try:
+                print("⏱️ 推論実行中（最大10分でタイムアウト）...")
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **model_inputs,
+                        **generation_config
+                    )
+                signal.alarm(0)  # タイムアウト解除
+                print("✅ 推論完了")
+                
+            except TimeoutError as te:
+                signal.alarm(0)  # タイムアウト解除
+                print(f"⏰ {te}")
+                print("💡 より軽量な設定で再試行します")
+                
+                # 軽量設定で再試行
+                lightweight_config = {
+                    "max_new_tokens": min(50, actual_max_new_tokens),  # 最大50トークンに制限
+                    "num_return_sequences": 1,
+                    "temperature": 0.7,
+                    "do_sample": True,
+                    "top_p": 0.8,
+                    "top_k": 30,
+                    "repetition_penalty": 1.1,
+                    "pad_token_id": self.tokenizer.eos_token_id,
+                    "eos_token_id": self.tokenizer.eos_token_id,
+                    "use_cache": True,
+                    "early_stopping": True,  # 早期停止を有効化
+                }
+                
+                # 3分タイムアウトで軽量実行
+                signal.alarm(180)  # 3分 = 180秒
+                try:
+                    print("⏱️ 軽量設定で再実行中（最大3分でタイムアウト）...")
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **model_inputs,
+                            **lightweight_config
+                        )
+                    signal.alarm(0)  # タイムアウト解除
+                    print("✅ 軽量設定での推論完了")
+                    
+                except TimeoutError:
+                    signal.alarm(0)  # タイムアウト解除
+                    raise Exception("推論処理が軽量設定でもタイムアウトしました。モデルまたは環境に問題がある可能性があります。")
             
             end_time = time.time()
             generation_time = end_time - start_time
             
-            # 結果デコード（改善版）
+            # 結果デコード
             generated_text = self.tokenizer.decode(
                 outputs[0],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
+                skip_special_tokens=True
             )
             
-            # 生成部分のみ抽出（改善版）
-            if generated_text.startswith(prompt):
-                generated_only = generated_text[len(prompt):].strip()
-            else:
-                # プロンプトが完全一致しない場合の処理
-                generated_only = generated_text.strip()
-            
-            # 空の結果や「。」のみの場合の対処
-            if not generated_only or generated_only == "。" or len(generated_only) < 3:
-                print("⚠️ 生成結果が短すぎます。再生成を試行します...")
-                
-                # より緩い設定で再生成
-                retry_config = generation_config.copy()
-                retry_config.update({
-                    "temperature": min(temperature + 0.2, 1.0),  # 温度を上げる
-                    "top_p": 0.98,
-                    "repetition_penalty": 1.05,  # さらに緩和
-                    "min_length": input_tokens + 10,  # 最小長を設定
-                })
-                
-                with torch.no_grad():
-                    retry_outputs = self.model.generate(
-                        **model_inputs,
-                        **retry_config
-                    )
-                
-                retry_text = self.tokenizer.decode(
-                    retry_outputs[0],
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True
-                )
-                
-                if retry_text.startswith(prompt):
-                    generated_only = retry_text[len(prompt):].strip()
-                else:
-                    generated_only = retry_text.strip()
-                
-                # 再生成後の出力を使用
-                outputs = retry_outputs
+            # 生成部分のみ抽出
+            generated_only = generated_text[len(prompt):].strip()
             
             # リソース使用量測定終了
             final_memory = psutil.virtual_memory().used / (1024**3)
@@ -967,6 +898,68 @@ class JapaneseHeavyLLMDemo:
         except Exception as e:
             error_msg = f"日本語テキスト生成エラー: {e}"
             print(f"❌ {error_msg}")
+            print(f"📊 エラー詳細: {traceback.format_exc()}")
+            
+            # エラー時の緊急フォールバック
+            try:
+                print("🚨 緊急フォールバック: 最小設定で再試行")
+                
+                # 最小限の設定で再試行
+                emergency_inputs = self.tokenizer(
+                    prompt[:100],  # プロンプトを100文字に制限
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=128  # 入力長を大幅に制限
+                )
+                
+                emergency_config = {
+                    "max_new_tokens": 20,  # 最大20トークンに制限
+                    "num_return_sequences": 1,
+                    "temperature": 0.5,
+                    "do_sample": False,  # サンプリングを無効化
+                    "pad_token_id": self.tokenizer.eos_token_id,
+                    "eos_token_id": self.tokenizer.eos_token_id,
+                    "use_cache": True,
+                    "early_stopping": True,
+                }
+                
+                # 1分タイムアウトで緊急実行
+                import signal
+                signal.alarm(60)  # 1分 = 60秒
+                
+                try:
+                    print("⏱️ 緊急設定で実行中（最大1分でタイムアウト）...")
+                    emergency_inputs = {k: v for k, v in emergency_inputs.items() if k != 'token_type_ids'}
+                    
+                    with torch.no_grad():
+                        emergency_outputs = self.model.generate(
+                            **emergency_inputs,
+                            **emergency_config
+                        )
+                    
+                    signal.alarm(0)  # タイムアウト解除
+                    
+                    emergency_text = self.tokenizer.decode(
+                        emergency_outputs[0],
+                        skip_special_tokens=True
+                    )
+                    
+                    print("✅ 緊急フォールバック成功")
+                    return {
+                        "error": error_msg,
+                        "emergency_result": emergency_text,
+                        "note": "緊急フォールバックにより部分的な結果を生成",
+                        "traceback": traceback.format_exc()
+                    }
+                    
+                except Exception as emergency_error:
+                    signal.alarm(0)  # タイムアウト解除
+                    print(f"❌ 緊急フォールバックも失敗: {emergency_error}")
+                    
+            except Exception as fallback_error:
+                print(f"❌ フォールバック処理エラー: {fallback_error}")
+            
             return {"error": error_msg, "traceback": traceback.format_exc()}
     
     def _evaluate_japanese_quality(self, text: str) -> Dict:
@@ -1365,94 +1358,6 @@ class JapaneseHeavyLLMDemo:
             print(f"  📈 比較ベンチマークで差異を確認")
             print(f"  ⚡ 統合効果の定量的測定を実施")
 
-    def interactive_mode(self):
-        """インタラクティブモード"""
-        print("🎯 インタラクティブモードを開始します")
-        print("💡 'exit'または'quit'で終了、'help'でヘルプ表示")
-        print("=" * 60)
-        
-        while True:
-            try:
-                # ユーザー入力
-                user_input = input("\n🤖 プロンプトを入力してください: ").strip()
-                
-                # 終了コマンド
-                if user_input.lower() in ['exit', 'quit', '終了']:
-                    print("👋 インタラクティブモードを終了します")
-                    break
-                
-                # ヘルプコマンド
-                if user_input.lower() in ['help', 'ヘルプ']:
-                    self._show_interactive_help()
-                    continue
-                
-                # サンプルコマンド
-                if user_input.lower() in ['samples', 'サンプル']:
-                    self._show_prompt_samples()
-                    continue
-                
-                # 空入力チェック
-                if not user_input:
-                    print("⚠️ プロンプトを入力してください")
-                    continue
-                
-                # テキスト生成実行
-                print(f"\n🔄 生成中...")
-                start_time = time.time()
-                
-                result = self.generate_japanese_text(
-                    user_input, 
-                    max_new_tokens=200,
-                    temperature=0.7,
-                    do_sample=True
-                )
-                
-                generation_time = time.time() - start_time
-                
-                # 結果表示
-                print(f"\n✨ 生成結果:")
-                print(f"{'=' * 50}")
-                print(result.get('generated_text', '生成に失敗しました'))
-                print(f"{'=' * 50}")
-                
-                # 統計情報表示
-                if 'output_tokens' in result:
-                    tokens_per_sec = result['output_tokens'] / generation_time if generation_time > 0 else 0
-                    print(f"📊 統計: {result['output_tokens']}トークン, {generation_time:.1f}秒, {tokens_per_sec:.1f}トークン/秒")
-                
-            except KeyboardInterrupt:
-                print(f"\n⚠️ 中断されました。'exit'で終了してください。")
-                continue
-            except Exception as e:
-                print(f"\n❌ エラーが発生しました: {e}")
-                continue
-    
-    def _show_interactive_help(self):
-        """インタラクティブモードのヘルプ表示"""
-        print(f"\n📖 インタラクティブモードヘルプ:")
-        print(f"  • 任意のプロンプトを入力してテキスト生成")
-        print(f"  • 'exit' または 'quit': 終了")
-        print(f"  • 'help' または 'ヘルプ': このヘルプを表示")
-        print(f"  • 'samples' または 'サンプル': プロンプトサンプル表示")
-        print(f"  • Ctrl+C: 生成中断（モード継続）")
-        
-        if self.use_aggressive_memory:
-            print(f"  🚀 積極的メモリ最適化: 有効")
-        if self.use_advanced_quant:
-            print(f"  ⚡ 高度な量子化最適化: 有効")
-        if self.infer_os_enabled:
-            print(f"  🔧 Infer-OS最適化: 有効")
-    
-    def _show_prompt_samples(self):
-        """プロンプトサンプル表示"""
-        print(f"\n💡 プロンプトサンプル:")
-        
-        for category, prompts in JAPANESE_PROMPT_SAMPLES.items():
-            print(f"\n📂 {category}:")
-            for i, prompt in enumerate(prompts, 1):
-                print(f"  {i}. {prompt}")
-
-
 def main():
     """メイン実行関数"""
     parser = argparse.ArgumentParser(description="日本語重量級LLM Infer-OS最適化デモ")
@@ -1466,12 +1371,6 @@ def main():
                         help="8bit量子化を使用")
     parser.add_argument("--use-advanced-quant", action="store_true",
                         help="高度な量子化最適化を使用")
-    parser.add_argument("--use-aggressive-memory", action="store_true",
-                        help="積極的メモリ最適化を使用（27.8GB環境対応）")
-    parser.add_argument("--enable-npu", action="store_true", default=True,
-                        help="Windows NPU最適化を有効化（デフォルト: 有効）")
-    parser.add_argument("--disable-npu", action="store_true",
-                        help="Windows NPU最適化を無効化")
     parser.add_argument("--quantization-profile", type=str, default="balanced",
                         choices=["safe", "balanced", "aggressive"],
                         help="量子化プロファイル")
@@ -1482,68 +1381,62 @@ def main():
     parser.add_argument("--use-onnx-runtime", action="store_true",
                         help="ONNX Runtimeを使用")
     parser.add_argument("--onnx-optimization-level", type=int, default=2,
-                        choices=[0, 1, 2],
-                        help="ONNX最適化レベル")
+                        choices=[0, 1, 2], help="ONNX最適化レベル")
+    
+    # Infer-OS比較設定
+    parser.add_argument("--compare-infer-os", action="store_true", 
+                        help="Infer-OS有り無しの比較ベンチマークを実行")
+    parser.add_argument("--infer-os-enabled", action="store_true", default=True,
+                        help="Infer-OS機能を有効にする（デフォルト: True）")
+    parser.add_argument("--disable-infer-os", action="store_true",
+                        help="Infer-OS機能を無効にする")
+    parser.add_argument("--comparison-iterations", type=int, default=5,
+                        help="比較ベンチマークのイテレーション数（デフォルト: 5）")
     
     # 実行モード
     parser.add_argument("--interactive", action="store_true",
-                        help="インタラクティブモード")
-    parser.add_argument("--benchmark", action="store_true",
-                        help="ベンチマーク実行")
-    parser.add_argument("--compare-infer-os", action="store_true",
-                        help="Infer-OS有り無し比較ベンチマーク")
-    parser.add_argument("--infer-os-only", action="store_true",
-                        help="Infer-OS有効モードのみ実行（比較なし）")
-    parser.add_argument("--comparison-iterations", type=int, default=3,
-                        help="比較ベンチマークの反復回数")
-    
-    # プロンプト設定
+                        help="インタラクティブモードで実行")
+    parser.add_argument("--benchmark", action="store_true", 
+                        help="ベンチマークモードで実行")
     parser.add_argument("--prompt", type=str,
                         help="単発プロンプト実行")
-    parser.add_argument("--max-length", type=int, default=200,
+    parser.add_argument("--max-length", type=int, default=300,
                         help="最大生成長")
     
-    # その他
-    parser.add_argument("--pre-download", action="store_true",
-                        help="事前ダウンロード実行")
+    # 情報表示
     parser.add_argument("--list-models", action="store_true",
-                        help="利用可能モデル一覧表示")
+                        help="対応モデル一覧を表示")
     parser.add_argument("--samples", action="store_true",
-                        help="プロンプトサンプル表示")
+                        help="日本語プロンプトサンプルを表示")
+    parser.add_argument("--pre-download", action="store_true",
+                        help="事前ダウンロード機能を使用")
     
     args = parser.parse_args()
     
-    # モデル一覧表示
+    # Infer-OS機能の設定
+    infer_os_enabled = args.infer_os_enabled and not args.disable_infer_os
+    
+    # 情報表示オプション
     if args.list_models:
-        print("🤖 利用可能な日本語重量級モデル:")
-        models = [
-            "matsuo-lab/weblab-10b",
-            "rinna/youri-7b-chat", 
-            "rinna/japanese-gpt-neox-3.6b",
-            "cyberagent/open-calm-7b",
-            "stabilityai/japanese-stablelm-base-alpha-7b"
-        ]
-        for i, model in enumerate(models, 1):
-            print(f"  {i}. {model}")
+        print("\n🇯🇵 対応日本語重量級モデル一覧:")
+        for model_name, info in JAPANESE_HEAVY_MODELS.items():
+            print(f"\n📋 {model_name}")
+            print(f"  パラメータ数: {info['parameters']:,}")
+            print(f"  説明: {info['description']}")
+            print(f"  日本語品質: {info['japanese_quality']}")
+            print(f"  専門分野: {info['speciality']}")
+            print(f"  推奨メモリ: {info['recommended_memory_gb']}GB")
         return
     
-    # プロンプトサンプル表示
     if args.samples:
-        print("💡 日本語プロンプトサンプル:")
-        for category, prompts in JAPANESE_PROMPT_SAMPLES.items():
-            print(f"\n📂 {category}:")
+        print("\n🇯🇵 日本語プロンプトサンプル:")
+        for category, prompts in JAPANESE_PROMPTS.items():
+            print(f"\n📝 {category}:")
             for i, prompt in enumerate(prompts, 1):
                 print(f"  {i}. {prompt}")
         return
     
     try:
-        # Infer-OS有効モードのみ実行
-        if args.infer_os_only:
-            print("🚀 Infer-OS有効モードのみで実行します")
-            infer_os_enabled = True
-        else:
-            infer_os_enabled = True  # デフォルトで有効
-        
         # デモインスタンス作成
         demo = JapaneseHeavyLLMDemo(
             model_name=args.model,
@@ -1553,120 +1446,74 @@ def main():
             onnx_optimization_level=args.onnx_optimization_level,
             quantization_profile=args.quantization_profile,
             use_advanced_quant=args.use_advanced_quant,
-            use_aggressive_memory=args.use_aggressive_memory,
-            enable_npu=args.enable_npu and not args.disable_npu,
             infer_os_enabled=infer_os_enabled
         )
         
         # Infer-OS統合効果サマリー表示
         demo.display_infer_os_integration_summary()
         
-        # Infer-OS有効モードのみの場合
-        if args.infer_os_only:
-            print("⚡ Infer-OS有効モードで最適化実行中...")
-            print("💡 比較ベンチマークをスキップして直接実行します")
-            
-            # モデルロード
-            print("\n📥 Infer-OS最適化モデルロード開始...")
-            if not demo.load_model_with_optimization():
-                print("❌ モデルロードに失敗しました")
-                return
-            
-            # ONNX変換
-            if args.convert_to_onnx:
-                print("\n🚀 ONNX変換実行中...")
-                if demo.convert_to_onnx():
-                    print("✅ ONNX変換完了")
-                else:
-                    print("❌ ONNX変換失敗")
-            
-            # 実行モード分岐
-            if args.benchmark:
-                print("\n📊 Infer-OS最適化ベンチマーク実行中...")
-                results = demo.run_benchmark()
-                print("✅ ベンチマーク完了")
-                
-            elif args.prompt:
-                print("\n🎯 Infer-OS最適化単発プロンプト実行中...")
-                result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
-                print("\n生成結果:")
-                print(result.get('generated_text', ''))
-                
-            elif args.interactive:
-                print("\n🇯🇵 Infer-OS最適化インタラクティブモード開始")
-                demo.interactive_mode()
-                
-            else:
-                print("\n💡 Infer-OS有効モード使用方法:")
-                print("  --interactive: 最適化インタラクティブモード")
-                print("  --benchmark: 最適化ベンチマーク実行")
-                print("  --prompt 'テキスト': 最適化単発プロンプト実行")
-            
-            return
-        
         # Infer-OS比較ベンチマーク実行
         if args.compare_infer_os:
-            print("\n🔥 Infer-OS有り無し比較ベンチマーク実行")
+            print(f"\n🔥 Infer-OS有り無し比較ベンチマーク実行")
             comparison_results = demo.run_infer_os_comparison_benchmark(
                 num_iterations=args.comparison_iterations
             )
             
             if comparison_results:
-                print("\n✅ 比較ベンチマーク完了")
-                print("📊 詳細レポートが生成されました")
+                print(f"\n✅ 比較ベンチマーク完了")
+                print(f"📊 詳細レポートが生成されました")
             return
         
         # 事前ダウンロード
         if args.pre_download:
-            print("\n📥 事前ダウンロード実行中...")
+            print(f"\n📥 事前ダウンロード実行中...")
             if demo.pre_download_model():
-                print("✅ 事前ダウンロード完了")
+                print(f"✅ 事前ダウンロード完了")
             else:
-                print("❌ 事前ダウンロード失敗")
+                print(f"❌ 事前ダウンロード失敗")
                 return
         
         # モデルロード
-        print("\n📥 モデルロード開始...")
+        print(f"\n📥 モデルロード開始...")
         if not demo.load_model_with_optimization():
-            print("❌ モデルロードに失敗しました")
+            print(f"❌ モデルロードに失敗しました")
             return
         
         # ONNX変換
         if args.convert_to_onnx:
-            print("\n🚀 ONNX変換実行中...")
+            print(f"\n🚀 ONNX変換実行中...")
             if demo.convert_to_onnx():
-                print("✅ ONNX変換完了")
+                print(f"✅ ONNX変換完了")
             else:
-                print("❌ ONNX変換失敗")
+                print(f"❌ ONNX変換失敗")
         
         # 実行モード分岐
         if args.benchmark:
-            print("\n📊 ベンチマーク実行中...")
+            print(f"\n📊 ベンチマーク実行中...")
             results = demo.run_benchmark()
-            print("✅ ベンチマーク完了")
+            print(f"✅ ベンチマーク完了")
             
         elif args.prompt:
-            print("\n🎯 単発プロンプト実行中...")
+            print(f"\n🎯 単発プロンプト実行中...")
             result = demo.generate_japanese_text(args.prompt, max_new_tokens=args.max_length)
-            print("\n生成結果:")
-            print(result.get('generated_text', ''))
+            print(f"\n生成結果:")
+            print(f"{result.get('generated_text', '')}")
             
         elif args.interactive:
-            print("\n🇯🇵 インタラクティブモード開始")
+            print(f"\n🇯🇵 インタラクティブモード開始")
             demo.interactive_mode()
             
         else:
-            print("\n💡 使用方法:")
-            print("  --interactive: インタラクティブモード")
-            print("  --benchmark: ベンチマーク実行")
-            print("  --compare-infer-os: Infer-OS比較ベンチマーク")
-            print("  --infer-os-only: Infer-OS有効モードのみ実行（比較なし）")
-            print("  --prompt 'テキスト': 単発プロンプト実行")
-            print("  --list-models: モデル一覧表示")
-            print("  --samples: プロンプトサンプル表示")
+            print(f"\n💡 使用方法:")
+            print(f"  --interactive: インタラクティブモード")
+            print(f"  --benchmark: ベンチマーク実行")
+            print(f"  --compare-infer-os: Infer-OS比較ベンチマーク")
+            print(f"  --prompt 'テキスト': 単発プロンプト実行")
+            print(f"  --list-models: モデル一覧表示")
+            print(f"  --samples: プロンプトサンプル表示")
             
     except KeyboardInterrupt:
-        print("\n⚠️ ユーザーによって中断されました")
+        print(f"\n⚠️ ユーザーによって中断されました")
     except Exception as e:
         print(f"\n❌ エラーが発生しました: {e}")
         traceback.print_exc()
