@@ -180,6 +180,21 @@ class JapaneseHeavyLLMDemo:
                  use_onnx: bool = False, onnx_optimization_level: int = 2,
                  quantization_profile: str = "balanced", use_advanced_quant: bool = False,
                  infer_os_enabled: bool = True):
+        # プラットフォーム情報の取得
+        import platform
+        self.platform_info = {
+            "system": platform.system(),
+            "version": platform.version(),
+            "machine": platform.machine(),
+            "python_version": platform.python_version()
+        }
+        
+        # Windows環境の特別処理
+        self.is_windows = self.platform_info["system"] == "Windows"
+        if self.is_windows:
+            print(f"🪟 Windows環境を検出: {self.platform_info['system']} {self.platform_info['version']}")
+            print("💡 クロスプラットフォーム対応タイムアウト機能を使用します")
+        
         self.model_name = model_name
         self.use_4bit = use_4bit
         self.use_8bit = use_8bit
@@ -787,61 +802,104 @@ class JapaneseHeavyLLMDemo:
             # token_type_idsエラー回避: 不要なキーを除去
             model_inputs = {k: v for k, v in inputs.items() if k != 'token_type_ids'}
             
-            # タイムアウト機能付き推論実行
-            import signal
+            # クロスプラットフォーム対応タイムアウト機能付き推論実行
+            import threading
+            import platform
+            import queue
             
-            def timeout_handler(signum, frame):
-                raise TimeoutError("推論処理がタイムアウトしました（10分制限）")
+            def run_inference_with_timeout(model_inputs, generation_config, timeout_seconds):
+                """タイムアウト付きで推論を実行する関数"""
+                result_queue = queue.Queue()
+                exception_queue = queue.Queue()
+                
+                def inference_worker():
+                    try:
+                        print(f"⏱️ 推論実行中（最大{timeout_seconds//60}分でタイムアウト）...")
+                        with torch.no_grad():
+                            outputs = self.model.generate(
+                                **model_inputs,
+                                **generation_config
+                            )
+                        result_queue.put(outputs)
+                        print("✅ 推論完了")
+                    except Exception as e:
+                        exception_queue.put(e)
+                
+                # 推論を別スレッドで実行
+                inference_thread = threading.Thread(target=inference_worker)
+                inference_thread.daemon = True
+                inference_thread.start()
+                
+                # タイムアウト待機
+                inference_thread.join(timeout=timeout_seconds)
+                
+                if inference_thread.is_alive():
+                    # タイムアウト発生
+                    print(f"⏰ 推論処理がタイムアウトしました（{timeout_seconds//60}分制限）")
+                    return None
+                
+                # 例外チェック
+                if not exception_queue.empty():
+                    raise exception_queue.get()
+                
+                # 結果取得
+                if not result_queue.empty():
+                    return result_queue.get()
+                
+                return None
             
-            # 10分タイムアウト設定
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(600)  # 10分 = 600秒
+            # 段階的タイムアウト実行
+            outputs = None
             
             try:
-                print("⏱️ 推論実行中（最大10分でタイムアウト）...")
-                with torch.no_grad():
-                    outputs = self.model.generate(
-                        **model_inputs,
-                        **generation_config
-                    )
-                signal.alarm(0)  # タイムアウト解除
-                print("✅ 推論完了")
+                # 第1段階: 通常設定で10分タイムアウト
+                outputs = run_inference_with_timeout(model_inputs, generation_config, 600)
                 
-            except TimeoutError as te:
-                signal.alarm(0)  # タイムアウト解除
-                print(f"⏰ {te}")
-                print("💡 より軽量な設定で再試行します")
-                
-                # 軽量設定で再試行
-                lightweight_config = {
-                    "max_new_tokens": min(50, actual_max_new_tokens),  # 最大50トークンに制限
-                    "num_return_sequences": 1,
-                    "temperature": 0.7,
-                    "do_sample": True,
-                    "top_p": 0.8,
-                    "top_k": 30,
-                    "repetition_penalty": 1.1,
-                    "pad_token_id": self.tokenizer.eos_token_id,
-                    "eos_token_id": self.tokenizer.eos_token_id,
-                    "use_cache": True,
-                    "early_stopping": True,  # 早期停止を有効化
-                }
-                
-                # 3分タイムアウトで軽量実行
-                signal.alarm(180)  # 3分 = 180秒
-                try:
-                    print("⏱️ 軽量設定で再実行中（最大3分でタイムアウト）...")
-                    with torch.no_grad():
-                        outputs = self.model.generate(
-                            **model_inputs,
-                            **lightweight_config
-                        )
-                    signal.alarm(0)  # タイムアウト解除
-                    print("✅ 軽量設定での推論完了")
+                if outputs is None:
+                    print("💡 より軽量な設定で再試行します")
                     
-                except TimeoutError:
-                    signal.alarm(0)  # タイムアウト解除
-                    raise Exception("推論処理が軽量設定でもタイムアウトしました。モデルまたは環境に問題がある可能性があります。")
+                    # 軽量設定で再試行
+                    lightweight_config = {
+                        "max_new_tokens": min(50, actual_max_new_tokens),  # 最大50トークンに制限
+                        "num_return_sequences": 1,
+                        "temperature": 0.7,
+                        "do_sample": True,
+                        "top_p": 0.8,
+                        "top_k": 30,
+                        "repetition_penalty": 1.1,
+                        "pad_token_id": self.tokenizer.eos_token_id,
+                        "eos_token_id": self.tokenizer.eos_token_id,
+                        "use_cache": True,
+                        "early_stopping": True,  # 早期停止を有効化
+                    }
+                    
+                    # 第2段階: 軽量設定で3分タイムアウト
+                    outputs = run_inference_with_timeout(model_inputs, lightweight_config, 180)
+                    
+                    if outputs is None:
+                        print("💡 最小設定で最終試行します")
+                        
+                        # 最小設定で最終試行
+                        minimal_config = {
+                            "max_new_tokens": 20,  # 最大20トークンに制限
+                            "num_return_sequences": 1,
+                            "temperature": 0.5,
+                            "do_sample": False,  # サンプリングを無効化
+                            "pad_token_id": self.tokenizer.eos_token_id,
+                            "eos_token_id": self.tokenizer.eos_token_id,
+                            "use_cache": True,
+                            "early_stopping": True,
+                        }
+                        
+                        # 第3段階: 最小設定で1分タイムアウト
+                        outputs = run_inference_with_timeout(model_inputs, minimal_config, 60)
+                        
+                        if outputs is None:
+                            raise Exception("推論処理が全ての設定でタイムアウトしました。モデルまたは環境に問題がある可能性があります。")
+            
+            except Exception as inference_error:
+                print(f"⚠️ 推論実行エラー: {inference_error}")
+                raise inference_error
             
             end_time = time.time()
             generation_time = end_time - start_time
@@ -924,38 +982,68 @@ class JapaneseHeavyLLMDemo:
                     "early_stopping": True,
                 }
                 
-                # 1分タイムアウトで緊急実行
-                import signal
-                signal.alarm(60)  # 1分 = 60秒
+                # 1分タイムアウトで緊急実行（クロスプラットフォーム対応）
+                def emergency_inference():
+                    result_queue = queue.Queue()
+                    exception_queue = queue.Queue()
+                    
+                    def emergency_worker():
+                        try:
+                            print("⏱️ 緊急設定で実行中（最大1分でタイムアウト）...")
+                            emergency_inputs = {k: v for k, v in emergency_inputs.items() if k != 'token_type_ids'}
+                            
+                            with torch.no_grad():
+                                emergency_outputs = self.model.generate(
+                                    **emergency_inputs,
+                                    **emergency_config
+                                )
+                            result_queue.put(emergency_outputs)
+                            print("✅ 緊急フォールバック成功")
+                        except Exception as e:
+                            exception_queue.put(e)
+                    
+                    # 緊急推論を別スレッドで実行
+                    emergency_thread = threading.Thread(target=emergency_worker)
+                    emergency_thread.daemon = True
+                    emergency_thread.start()
+                    
+                    # 1分タイムアウト待機
+                    emergency_thread.join(timeout=60)
+                    
+                    if emergency_thread.is_alive():
+                        print("❌ 緊急フォールバックもタイムアウトしました")
+                        return None
+                    
+                    # 例外チェック
+                    if not exception_queue.empty():
+                        raise exception_queue.get()
+                    
+                    # 結果取得
+                    if not result_queue.empty():
+                        return result_queue.get()
+                    
+                    return None
                 
                 try:
-                    print("⏱️ 緊急設定で実行中（最大1分でタイムアウト）...")
-                    emergency_inputs = {k: v for k, v in emergency_inputs.items() if k != 'token_type_ids'}
+                    emergency_outputs = emergency_inference()
                     
-                    with torch.no_grad():
-                        emergency_outputs = self.model.generate(
-                            **emergency_inputs,
-                            **emergency_config
+                    if emergency_outputs is not None:
+                        emergency_text = self.tokenizer.decode(
+                            emergency_outputs[0],
+                            skip_special_tokens=True
                         )
-                    
-                    signal.alarm(0)  # タイムアウト解除
-                    
-                    emergency_text = self.tokenizer.decode(
-                        emergency_outputs[0],
-                        skip_special_tokens=True
-                    )
-                    
-                    print("✅ 緊急フォールバック成功")
-                    return {
-                        "error": error_msg,
-                        "emergency_result": emergency_text,
-                        "note": "緊急フォールバックにより部分的な結果を生成",
-                        "traceback": traceback.format_exc()
-                    }
-                    
+                        
+                        return {
+                            "error": error_msg,
+                            "emergency_result": emergency_text,
+                            "note": "緊急フォールバックにより部分的な結果を生成",
+                            "traceback": traceback.format_exc()
+                        }
+                    else:
+                        print("❌ 緊急フォールバックも失敗しました")
+                        
                 except Exception as emergency_error:
-                    signal.alarm(0)  # タイムアウト解除
-                    print(f"❌ 緊急フォールバックも失敗: {emergency_error}")
+                    print(f"❌ 緊急フォールバックエラー: {emergency_error}")
                     
             except Exception as fallback_error:
                 print(f"❌ フォールバック処理エラー: {fallback_error}")
