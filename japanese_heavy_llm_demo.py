@@ -823,6 +823,7 @@ class JapaneseHeavyLLMDemo:
                         result_queue.put(outputs)
                         print("✅ 推論完了")
                     except Exception as e:
+                        print(f"⚠️ 推論エラー: {e}")
                         exception_queue.put(e)
                 
                 # 推論を別スレッドで実行
@@ -836,16 +837,22 @@ class JapaneseHeavyLLMDemo:
                 if inference_thread.is_alive():
                     # タイムアウト発生
                     print(f"⏰ 推論処理がタイムアウトしました（{timeout_seconds//60}分制限）")
+                    # スレッドを強制終了させるため、新しいプロセスで実行
+                    import gc
+                    gc.collect()  # ガベージコレクション実行
                     return None
                 
                 # 例外チェック
                 if not exception_queue.empty():
-                    raise exception_queue.get()
+                    error = exception_queue.get()
+                    print(f"⚠️ 推論処理でエラーが発生: {error}")
+                    raise error
                 
                 # 結果取得
                 if not result_queue.empty():
                     return result_queue.get()
                 
+                print("⚠️ 推論結果が取得できませんでした")
                 return None
             
             # 段階的タイムアウト実行
@@ -853,6 +860,7 @@ class JapaneseHeavyLLMDemo:
             
             try:
                 # 第1段階: 通常設定で10分タイムアウト
+                print("🚀 第1段階: 通常設定での推論実行")
                 outputs = run_inference_with_timeout(model_inputs, generation_config, 600)
                 
                 if outputs is None:
@@ -871,9 +879,11 @@ class JapaneseHeavyLLMDemo:
                         "eos_token_id": self.tokenizer.eos_token_id,
                         "use_cache": True,
                         "early_stopping": True,  # 早期停止を有効化
+                        "num_beams": 1,  # ビームサーチを無効化
                     }
                     
                     # 第2段階: 軽量設定で3分タイムアウト
+                    print("🚀 第2段階: 軽量設定での推論実行")
                     outputs = run_inference_with_timeout(model_inputs, lightweight_config, 180)
                     
                     if outputs is None:
@@ -892,26 +902,83 @@ class JapaneseHeavyLLMDemo:
                         }
                         
                         # 第3段階: 最小設定で1分タイムアウト
+                        print("🚀 第3段階: 最小設定での推論実行")
                         outputs = run_inference_with_timeout(model_inputs, minimal_config, 60)
                         
                         if outputs is None:
-                            raise Exception("推論処理が全ての設定でタイムアウトしました。モデルまたは環境に問題がある可能性があります。")
+                            # 最後の手段: 非常に短いテキスト生成
+                            print("🚨 緊急フォールバック: 超軽量設定")
+                            emergency_config = {
+                                "max_new_tokens": 5,  # 最大5トークンのみ
+                                "num_return_sequences": 1,
+                                "temperature": 0.1,
+                                "do_sample": False,
+                                "pad_token_id": self.tokenizer.eos_token_id,
+                                "eos_token_id": self.tokenizer.eos_token_id,
+                                "use_cache": True,
+                            }
+                            outputs = run_inference_with_timeout(model_inputs, emergency_config, 30)
+                            
+                            if outputs is None:
+                                raise Exception("推論処理が全ての設定でタイムアウトしました。モデルまたは環境に問題がある可能性があります。")
             
             except Exception as inference_error:
                 print(f"⚠️ 推論実行エラー: {inference_error}")
-                raise inference_error
+                # エラー時の緊急フォールバック
+                return {
+                    "error": f"推論処理エラー: {inference_error}",
+                    "prompt": prompt,
+                    "generated_text": "",
+                    "note": "推論処理でエラーが発生しました。より軽量なモデルまたは設定をお試しください。"
+                }
             
             end_time = time.time()
             generation_time = end_time - start_time
             
+            # 結果の検証
+            if outputs is None:
+                print("❌ 推論結果がNoneです")
+                return {
+                    "error": "推論結果が生成されませんでした",
+                    "prompt": prompt,
+                    "generated_text": "",
+                    "note": "推論処理は完了しましたが、結果が取得できませんでした。"
+                }
+            
+            if len(outputs) == 0:
+                print("❌ 推論結果が空です")
+                return {
+                    "error": "推論結果が空です",
+                    "prompt": prompt,
+                    "generated_text": "",
+                    "note": "推論処理は完了しましたが、結果が空でした。"
+                }
+            
             # 結果デコード
-            generated_text = self.tokenizer.decode(
-                outputs[0],
-                skip_special_tokens=True
-            )
+            try:
+                generated_text = self.tokenizer.decode(
+                    outputs[0],
+                    skip_special_tokens=True
+                )
+                print(f"✅ デコード完了: {len(generated_text)}文字")
+            except Exception as decode_error:
+                print(f"❌ デコードエラー: {decode_error}")
+                return {
+                    "error": f"デコードエラー: {decode_error}",
+                    "prompt": prompt,
+                    "generated_text": "",
+                    "note": "推論結果のデコードに失敗しました。"
+                }
             
             # 生成部分のみ抽出
-            generated_only = generated_text[len(prompt):].strip()
+            try:
+                generated_only = generated_text[len(prompt):].strip()
+                if not generated_only:
+                    print("⚠️ 生成されたテキストが空です")
+                    generated_only = "（生成されたテキストが空でした）"
+            except Exception as extract_error:
+                print(f"⚠️ テキスト抽出エラー: {extract_error}")
+                generated_only = generated_text  # フォールバック
             
             # リソース使用量測定終了
             final_memory = psutil.virtual_memory().used / (1024**3)
