@@ -174,31 +174,44 @@ AIアシスタント: """,
             print(f"✅ トークナイザー読み込み完了（infer-OS最適化）")
             print(f"📊 語彙サイズ: {len(self.tokenizer)}")
             
-            # BitsAndBytesConfig設定（infer-OS最適化）
+            # BitsAndBytesConfig設定（infer-OS最適化）- エラー回避版
             print("🔧 infer-OS量子化設定作成中...")
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                llm_int8_enable_fp32_cpu_offload=True,
-                llm_int8_has_fp16_weight=False,
-                llm_int8_threshold=6.0,
-                llm_int8_skip_modules=None,
-            )
+            try:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True,
+                    llm_int8_has_fp16_weight=False,
+                    llm_int8_threshold=6.0,
+                )
+            except Exception as config_error:
+                print(f"⚠️ BitsAndBytesConfig作成エラー: {config_error}")
+                print("🔄 標準設定で継続します")
+                quantization_config = None
             
             # GPT-OSS-20Bモデル読み込み（infer-OS最適化）
             print("🏗️ GPT-OSS-20Bモデル読み込み中（infer-OS最適化）...")
             print("⚡ 8bit量子化 + CPU offload + メモリ最適化")
             
+            # モデル読み込み設定
+            model_kwargs = {
+                "device_map": "auto",
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+                "torch_dtype": torch.float16,
+                "cache_dir": "./cache",
+                "use_safetensors": True
+            }
+            
+            # 量子化設定が利用可能な場合のみ追加
+            if quantization_config is not None:
+                model_kwargs["quantization_config"] = quantization_config
+                print("✅ 8bit量子化設定適用")
+            else:
+                print("⚠️ 標準float16設定使用")
+            
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.selected_model,
-                quantization_config=quantization_config,
-                device_map="auto",
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.float16,
-                cache_dir="./cache",
-                offload_folder="./offload",
-                offload_state_dict=True,
-                use_safetensors=True
+                **model_kwargs
             )
             
             # infer-OS追加最適化
@@ -373,13 +386,11 @@ AIアシスタント: """,
             providers = []
             provider_options = []
             
-            # VitisAI ExecutionProvider（Ryzen AI NPU）
+            # VitisAI ExecutionProvider（Ryzen AI NPU）- 設定ファイルエラー修正
             if 'VitisAIExecutionProvider' in ort.get_available_providers():
                 providers.append('VitisAIExecutionProvider')
-                provider_options.append({
-                    'config_file': '',
-                    'target': 'DPUCAHX8H'
-                })
+                # 設定ファイルエラー回避: 空の設定を使用
+                provider_options.append({})
                 print("🎯 VitisAI ExecutionProvider利用可能（Ryzen AI NPU）")
             
             # CPU ExecutionProvider（フォールバック）
@@ -403,17 +414,34 @@ AIアシスタント: """,
                 session_options.enable_profiling = False  # メモリ節約
                 print("⚡ infer-OS最適化セッション設定適用")
             
-            # セッション作成
-            self.onnx_session = ort.InferenceSession(
-                str(onnx_path),
-                sess_options=session_options,
-                providers=providers,
-                provider_options=provider_options
-            )
-            
-            active_provider = self.onnx_session.get_providers()[0]
-            print(f"✅ infer-OS最適化ONNX推論セッション作成成功")
-            print(f"🎯 アクティブプロバイダー: {active_provider}")
+            # セッション作成（エラーハンドリング強化）
+            try:
+                self.onnx_session = ort.InferenceSession(
+                    str(onnx_path),
+                    sess_options=session_options,
+                    providers=providers,
+                    provider_options=provider_options
+                )
+                
+                active_provider = self.onnx_session.get_providers()[0]
+                print(f"✅ infer-OS最適化ONNX推論セッション作成成功")
+                print(f"🎯 アクティブプロバイダー: {active_provider}")
+                
+            except Exception as session_error:
+                print(f"❌ ONNX推論セッション作成エラー: {session_error}")
+                print("🔄 CPUプロバイダーのみで再試行...")
+                
+                # CPUプロバイダーのみで再試行
+                try:
+                    self.onnx_session = ort.InferenceSession(
+                        str(onnx_path),
+                        sess_options=session_options,
+                        providers=['CPUExecutionProvider']
+                    )
+                    print("✅ CPU ExecutionProviderでセッション作成成功")
+                except Exception as cpu_error:
+                    print(f"❌ CPU ExecutionProviderでもエラー: {cpu_error}")
+                    return False
             
             # NPUテスト実行（タイムアウト対策）
             print("🔧 NPU動作テスト実行中（infer-OS最適化）...")
