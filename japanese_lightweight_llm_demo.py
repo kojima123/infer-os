@@ -444,36 +444,58 @@ class JapaneseLightweightLLMDemo:
         # デバイスへの移動
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
-        # 生成設定
+        # 生成設定（軽量化）
         generation_config = {
-            "max_new_tokens": max_length,
-            "min_new_tokens": 5,
+            "max_new_tokens": min(max_length, 30),  # 最大長を制限
+            "min_new_tokens": 3,  # 最小長を短縮
             "do_sample": True,
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "top_k": 50,
-            "repetition_penalty": 1.1,
+            "temperature": 0.5,  # より決定的な生成
+            "top_p": 0.8,        # より集中した生成
+            "top_k": 20,         # 候補を大幅に絞る
+            "repetition_penalty": 1.2,  # 繰り返し抑制強化
             "pad_token_id": self.tokenizer.pad_token_id,
             "eos_token_id": self.tokenizer.eos_token_id,
-            "use_cache": True
+            "use_cache": True,
+            "early_stopping": True,  # 早期停止を有効化
+            "num_beams": 1,      # ビームサーチを無効化（高速化）
         }
         
         # Infer-OS最適化の適用
         if self.infer_os_enabled:
-            # Infer-OS最適化設定
+            # Infer-OS最適化設定（さらに軽量化）
             generation_config.update({
-                "temperature": 0.6,  # より安定した生成
-                "top_p": 0.85,       # より集中した生成
-                "top_k": 40,         # 候補を絞る
-                "repetition_penalty": 1.15  # 繰り返し抑制強化
+                "temperature": 0.3,  # より決定的
+                "top_p": 0.7,        # より集中
+                "top_k": 10,         # 候補を最小限に
+                "max_new_tokens": min(max_length, 20),  # さらに短縮
+                "repetition_penalty": 1.3  # 繰り返し抑制最大化
             })
         
-        # テキスト生成
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                **generation_config
-            )
+        # テキスト生成（タイムアウト制御付き）
+        try:
+            with torch.no_grad():
+                # 推論前のメモリクリーンアップ
+                import gc
+                gc.collect()
+                
+                outputs = self.model.generate(
+                    **inputs,
+                    **generation_config
+                )
+        except Exception as e:
+            # 生成エラー時の緊急フォールバック
+            print(f"⚠️ 生成エラー、緊急フォールバックを実行: {e}")
+            generation_config.update({
+                "max_new_tokens": 5,
+                "temperature": 0.1,
+                "top_k": 5,
+                "do_sample": False  # 貪欲デコード
+            })
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    **generation_config
+                )
         
         # デコード
         generated_text = self.tokenizer.decode(
@@ -490,12 +512,12 @@ class JapaneseLightweightLLMDemo:
         print(f"最大長: {max_length}")
         print()
         
-        # 段階的フォールバック設定
+        # 段階的フォールバック設定（短縮）
         fallback_configs = [
-            {"timeout": 300, "max_length": max_length, "name": "通常設定"},
-            {"timeout": 120, "max_length": min(max_length, 50), "name": "軽量設定"},
-            {"timeout": 60, "max_length": min(max_length, 20), "name": "最小設定"},
-            {"timeout": 30, "max_length": 10, "name": "緊急設定"}
+            {"timeout": 60, "max_length": min(max_length, 30), "name": "通常設定"},
+            {"timeout": 30, "max_length": min(max_length, 20), "name": "軽量設定"},
+            {"timeout": 15, "max_length": min(max_length, 10), "name": "最小設定"},
+            {"timeout": 10, "max_length": 5, "name": "緊急設定"}
         ]
         
         for i, config in enumerate(fallback_configs, 1):
