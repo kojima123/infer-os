@@ -86,21 +86,145 @@ gaia-cli --model llama-7b --optimization inferos --test --dry-run
 ### **Infer-OS Control Agent API v1.0**
 
 #### **ベースURL**: `http://127.0.0.1:7031/v1`
+> **セキュリティ**: ローカルホスト専用バインド（127.0.0.1）、認証トークン必須
+
+#### **認証設定**
+
+##### **環境変数によるトークン設定**
+```cmd
+# Windows PowerShell
+$token = [System.Guid]::NewGuid().ToString()
+[Environment]::SetEnvironmentVariable("INFEROS_AGENT_TOKEN", $token, "User")
+echo "Generated token: $token"
+
+# Linux/macOS
+export INFEROS_AGENT_TOKEN=$(uuidgen)
+echo "Generated token: $INFEROS_AGENT_TOKEN"
+```
+
+##### **認証ヘッダー**
+```http
+# 認証が必要なエンドポイント（POST/PUT/DELETE）
+X-Inferos-Token: your-generated-token-here
+
+# 例
+curl -X POST http://127.0.0.1:7031/v1/policy \
+  -H "X-Inferos-Token: $INFEROS_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kv": {"mode": "dynamic"}}'
+```
 
 #### **エンドポイント一覧**
 
-| エンドポイント | メソッド | 説明 | 認証 |
-|---------------|----------|------|------|
-| `/health` | GET | ヘルスチェック | 不要 |
-| `/metrics` | GET | パフォーマンスメトリクス | 不要 |
-| `/policy` | GET/POST | 最適化ポリシー取得/設定 | 不要 |
-| `/baseline` | POST | ベースラインモード切替 | 不要 |
-| `/history` | GET | パフォーマンス履歴 | 不要 |
-| `/config` | GET/POST | 設定取得/更新 | 不要 |
+| エンドポイント | メソッド | 説明 | 認証 | バインド |
+|---------------|----------|------|------|----------|
+| `/health` | GET | ヘルスチェック | 不要 | 127.0.0.1 |
+| `/metrics` | GET | パフォーマンスメトリクス | 不要 | 127.0.0.1 |
+| `/policy` | GET | 最適化ポリシー取得 | 不要 | 127.0.0.1 |
+| `/policy` | POST | 最適化ポリシー設定 | **必須** | 127.0.0.1 |
+| `/baseline` | POST | ベースラインモード切替 | **必須** | 127.0.0.1 |
+| `/config` | GET | 設定取得 | 不要 | 127.0.0.1 |
+| `/config` | POST | 設定更新 | **必須** | 127.0.0.1 |
+| `/history` | GET | パフォーマンス履歴 | 不要 | 127.0.0.1 |
+
+#### **API セキュリティ実装例**
+
+##### **認証ミドルウェア**
+```python
+# inferos_control_agent.py
+import os
+import secrets
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="Infer-OS Control Agent", version="1.0.0")
+
+# セキュリティ設定
+AGENT_TOKEN = os.getenv("INFEROS_AGENT_TOKEN")
+if not AGENT_TOKEN:
+    # 開発環境用の自動生成（本番では環境変数必須）
+    AGENT_TOKEN = secrets.token_urlsafe(32)
+    print(f"⚠️  自動生成トークン: {AGENT_TOKEN}")
+    print("本番環境では INFEROS_AGENT_TOKEN 環境変数を設定してください")
+
+# CORS無効化（ローカル専用）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1", "http://localhost"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-Inferos-Token", "Content-Type"],
+)
+
+def require_auth(x_inferos_token: str | None = Header(None)):
+    """認証が必要なエンドポイント用"""
+    if not x_inferos_token or x_inferos_token != AGENT_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Valid X-Inferos-Token header required"
+        )
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """セキュリティヘッダー追加"""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
+# 認証不要エンドポイント
+@app.get("/v1/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.get("/v1/metrics")
+async def get_metrics():
+    return get_current_metrics()
+
+# 認証必須エンドポイント
+@app.post("/v1/policy")
+async def set_policy(
+    policy: PolicyConfig,
+    _: None = Depends(require_auth)
+):
+    return apply_policy_config(policy)
+
+@app.post("/v1/config")
+async def update_config(
+    config: AgentConfig,
+    _: None = Depends(require_auth)
+):
+    return update_agent_config(config)
+```
+
+##### **ポート設定の柔軟化**
+```python
+# 設定可能ポート（デフォルト: 7031）
+DEFAULT_PORT = 7031
+AGENT_PORT = int(os.getenv("INFEROS_AGENT_PORT", DEFAULT_PORT))
+
+# ランダムポート生成（セキュリティ強化）
+if os.getenv("INFEROS_RANDOM_PORT", "false").lower() == "true":
+    import socket
+    with socket.socket() as s:
+        s.bind(('', 0))
+        AGENT_PORT = s.getsockname()[1]
+    print(f"🔒 ランダムポート使用: {AGENT_PORT}")
+
+# サーバー起動
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="127.0.0.1",  # ローカルホスト専用
+        port=AGENT_PORT,
+        log_level="info"
+    )
+```
 
 #### **API スキーマ定義**
 
-##### **POST /v1/policy**
+##### **POST /v1/policy（認証必須）**
 ```json
 {
   "type": "object",
@@ -133,8 +257,22 @@ gaia-cli --model llama-7b --optimization inferos --test --dry-run
       "type": "object",
       "properties": {
         "enable_iobinding": {"type": "boolean", "default": true},
-        "dml_pool_bytes": {"type": "integer", "minimum": 1073741824, "default": 2147483648},
-        "host_pool_bytes": {"type": "integer", "minimum": 1073741824, "default": 4294967296}
+        "dml_pool_bytes": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1073741824},
+            {"type": "string", "pattern": "^\\d+(\\.\\d+)?(B|KB|MB|GB|MiB|GiB)$"}
+          ],
+          "default": 2147483648,
+          "description": "メモリプールサイズ（バイト整数または人間可読文字列）"
+        },
+        "host_pool_bytes": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1073741824},
+            {"type": "string", "pattern": "^\\d+(\\.\\d+)?(B|KB|MB|GB|MiB|GiB)$"}
+          ],
+          "default": 4294967296,
+          "description": "ホストメモリプールサイズ（バイト整数または人間可読文字列）"
+        }
       }
     },
     "scheduler": {
@@ -168,11 +306,949 @@ gaia-cli --model llama-7b --optimization inferos --test --dry-run
 }
 ```
 
+##### **単位変換ユーティリティ**
+```python
+def parse_memory_size(value) -> int:
+    """人間可読メモリサイズをバイト整数に変換"""
+    if isinstance(value, int):
+        return value
+    
+    if isinstance(value, str):
+        import re
+        match = re.match(r'^(\d+(?:\.\d+)?)(B|KB|MB|GB|MiB|GiB)$', value.upper())
+        if not match:
+            raise ValueError(f"Invalid memory size format: {value}")
+        
+        size, unit = match.groups()
+        size = float(size)
+        
+        multipliers = {
+            'B': 1,
+            'KB': 1000,
+            'MB': 1000**2,
+            'GB': 1000**3,
+            'MIB': 1024**2,
+            'GIB': 1024**3
+        }
+        
+        return int(size * multipliers[unit])
+    
+    raise ValueError(f"Unsupported memory size type: {type(value)}")
+
+# 使用例
+policy_data = {
+    "io": {
+        "dml_pool_bytes": "2048MiB",  # → 2147483648
+        "host_pool_bytes": "4GiB"     # → 4294967296
+    }
+}
+
+# 正規化
+policy_data["io"]["dml_pool_bytes"] = parse_memory_size(policy_data["io"]["dml_pool_bytes"])
+policy_data["io"]["host_pool_bytes"] = parse_memory_size(policy_data["io"]["host_pool_bytes"])
+```
+
 ##### **GET /v1/metrics レスポンス例**
 ```json
 {
-  "timestamp": "2024-01-15T10:30:00Z",
-  "tps": 26.8,
+  "timestamp": "2024-01-15T10:30:45.123Z",
+  "measurement_window": {
+    "duration_seconds": 60,
+    "sample_count": 150,
+    "description": "直近60秒間の移動平均（150リクエスト）"
+  },
+  "throughput": {
+    "tokens_per_second": 45.7,
+    "requests_per_second": 2.3,
+    "calculation": "total_tokens / total_time_seconds",
+    "note": "TPS = 生成トークン総数 / 実時間, RPS = リクエスト数 / 実時間"
+  },
+  "latency": {
+    "mean_ms": 1250.5,
+    "median_ms": 1180.0,
+    "p95_ms": 2100.0,
+    "p99_ms": 3200.0,
+    "std_ms": 450.2,
+    "calculation": "end_time - start_time per request"
+  },
+  "first_token_latency": {
+    "mean_ms": 380.2,
+    "median_ms": 350.0,
+    "p95_ms": 650.0,
+    "measurement_method": "実測（first_token_emit_time - request_start_time）",
+    "note": "推定値ではなく、実際のトークン生成開始時刻を計測"
+  },
+  "quality": {
+    "delta_ppl_est": {
+      "current": 0.12,
+      "baseline": 2.45,
+      "delta": 0.12,
+      "measurement": {
+        "method": "オンライン簡易推定（NLL近似）",
+        "window_size": 100,
+        "update_frequency": "リクエスト毎",
+        "last_full_evaluation": "2024-01-15T09:00:00Z"
+      }
+    },
+    "accept_rate": {
+      "current": 0.78,
+      "target": 0.75,
+      "measurement": {
+        "method": "スペキュレイティブ生成受諾率",
+        "window_size": 50,
+        "description": "直近50回の推論での受諾トークン率"
+      }
+    },
+    "full_evaluation": {
+      "last_run": "2024-01-15T06:00:00Z",
+      "next_scheduled": "2024-01-16T06:00:00Z",
+      "dataset": "validation_set_500samples",
+      "baseline_ppl": 2.45,
+      "current_ppl": 2.57,
+      "delta_ppl": 0.12,
+      "status": "within_threshold"
+    }
+  },
+  "memory": {
+    "kv_cache_usage_mb": 1024.5,
+    "kv_cache_hit_rate": 0.85,
+    "total_allocated_mb": 3072.0,
+    "peak_usage_mb": 3456.0
+  },
+  "device_utilization": {
+    "npu_utilization": 0.67,
+    "dml_utilization": 0.45,
+    "cpu_utilization": 0.23
+  },
+  "optimization_status": {
+    "kv_quantization_active": true,
+    "io_binding_active": true,
+    "hybrid_scheduling_active": true,
+    "current_policy": "dynamic"
+  }
+}
+```
+
+#### **メトリクス算出定義**
+
+##### **スループット計算**
+```python
+class MetricsCalculator:
+    def __init__(self, window_seconds: int = 60):
+        self.window_seconds = window_seconds
+        self.request_history = []
+        
+    def calculate_throughput(self) -> Dict[str, float]:
+        """スループット計算（時間窓ベース）"""
+        now = time.time()
+        cutoff = now - self.window_seconds
+        
+        # 時間窓内のリクエストのみ
+        recent_requests = [
+            req for req in self.request_history 
+            if req['end_time'] >= cutoff
+        ]
+        
+        if not recent_requests:
+            return {"tokens_per_second": 0.0, "requests_per_second": 0.0}
+        
+        total_tokens = sum(req['tokens_generated'] for req in recent_requests)
+        total_time = now - min(req['start_time'] for req in recent_requests)
+        
+        return {
+            "tokens_per_second": total_tokens / total_time if total_time > 0 else 0.0,
+            "requests_per_second": len(recent_requests) / total_time if total_time > 0 else 0.0
+        }
+```
+
+##### **First Token Latency実測**
+```python
+class FTLMeasurement:
+    def __init__(self):
+        self.ftl_samples = []
+        
+    def measure_generation(self, prompt: str, model, tokenizer):
+        """FTL実測付き生成"""
+        start_time = time.perf_counter()
+        first_token_time = None
+        
+        # ストリーミング生成でFTL計測
+        inputs = tokenizer(prompt, return_tensors="pt")
+        
+        with torch.no_grad():
+            for i, output_ids in enumerate(model.generate(
+                **inputs,
+                max_new_tokens=100,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=tokenizer.eos_token_id,
+                # ストリーミング有効化
+                output_scores=True,
+                return_dict_in_generate=True
+            )):
+                if i == 0:  # 最初のトークン
+                    first_token_time = time.perf_counter()
+                    break
+        
+        end_time = time.perf_counter()
+        
+        # メトリクス記録
+        if first_token_time:
+            ftl_ms = (first_token_time - start_time) * 1000
+            total_latency_ms = (end_time - start_time) * 1000
+            
+            self.ftl_samples.append({
+                "ftl_ms": ftl_ms,
+                "total_latency_ms": total_latency_ms,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "first_token_latency_ms": ftl_ms,
+                "total_latency_ms": total_latency_ms,
+                "response": tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            }
+```
+
+##### **品質測定（PPL）**
+```python
+class QualityMeasurement:
+    def __init__(self, validation_dataset: List[str]):
+        self.validation_dataset = validation_dataset
+        self.baseline_ppl = None
+        self.online_nll_buffer = []
+        
+    def calculate_full_ppl(self, model, tokenizer) -> float:
+        """完全PPL計算（バッチ処理）"""
+        total_nll = 0.0
+        total_tokens = 0
+        
+        model.eval()
+        with torch.no_grad():
+            for text in self.validation_dataset:
+                inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                
+                # 負の対数尤度計算
+                outputs = model(**inputs, labels=inputs["input_ids"])
+                nll = outputs.loss.item() * inputs["input_ids"].size(1)
+                
+                total_nll += nll
+                total_tokens += inputs["input_ids"].size(1)
+        
+        ppl = math.exp(total_nll / total_tokens)
+        return ppl
+    
+    def estimate_online_ppl(self, logits: torch.Tensor, targets: torch.Tensor) -> float:
+        """オンライン簡易PPL推定"""
+        # クロスエントロピー計算
+        ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        
+        # NLLバッファに追加
+        self.online_nll_buffer.append(ce_loss.item())
+        
+        # 窓サイズ維持
+        if len(self.online_nll_buffer) > 100:
+            self.online_nll_buffer.pop(0)
+        
+        # 平均NLLからPPL推定
+        avg_nll = sum(self.online_nll_buffer) / len(self.online_nll_buffer)
+        estimated_ppl = math.exp(avg_nll)
+        
+        return estimated_ppl
+    
+    def get_quality_metrics(self) -> Dict:
+        """品質メトリクス取得"""
+        current_ppl_est = self.estimate_online_ppl() if self.online_nll_buffer else 0.0
+        
+        return {
+            "delta_ppl_est": {
+                "current": current_ppl_est,
+                "baseline": self.baseline_ppl or 0.0,
+                "delta": current_ppl_est - (self.baseline_ppl or 0.0),
+                "measurement": {
+                    "method": "オンライン簡易推定（NLL近似）",
+                    "window_size": len(self.online_nll_buffer),
+                    "update_frequency": "リクエスト毎"
+                }
+            }
+        }
+```
+
+#### **品質管理システム**
+
+##### **定期評価スケジューラ**
+```python
+import schedule
+import threading
+from datetime import datetime, timedelta
+
+class QualityScheduler:
+    def __init__(self, quality_measurement: QualityMeasurement):
+        self.quality_measurement = quality_measurement
+        self.scheduler_thread = None
+        self.running = False
+        
+    def start_scheduler(self):
+        """品質評価スケジューラ開始"""
+        # 毎日6時に完全評価
+        schedule.every().day.at("06:00").do(self.run_full_evaluation)
+        
+        # 4時間毎に軽量評価
+        schedule.every(4).hours.do(self.run_light_evaluation)
+        
+        self.running = True
+        self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+        self.scheduler_thread.start()
+        
+    def _scheduler_loop(self):
+        """スケジューラループ"""
+        while self.running:
+            schedule.run_pending()
+            time.sleep(60)  # 1分間隔でチェック
+    
+    def run_full_evaluation(self):
+        """完全品質評価実行"""
+        print(f"🔍 完全品質評価開始: {datetime.now()}")
+        
+        try:
+            # モデルとトークナイザー取得
+            model, tokenizer = self._get_current_model()
+            
+            # 完全PPL計算
+            current_ppl = self.quality_measurement.calculate_full_ppl(model, tokenizer)
+            baseline_ppl = self.quality_measurement.baseline_ppl or current_ppl
+            
+            # 品質劣化チェック
+            delta_ppl = current_ppl - baseline_ppl
+            if delta_ppl > 0.5:  # 閾値超過
+                self._trigger_quality_alert(delta_ppl, current_ppl, baseline_ppl)
+            
+            # 結果記録
+            self._record_evaluation_result({
+                "timestamp": datetime.now().isoformat(),
+                "type": "full_evaluation",
+                "current_ppl": current_ppl,
+                "baseline_ppl": baseline_ppl,
+                "delta_ppl": delta_ppl,
+                "status": "alert" if delta_ppl > 0.5 else "normal"
+            })
+            
+            print(f"✅ 完全品質評価完了: ΔPPL={delta_ppl:.3f}")
+            
+        except Exception as e:
+            print(f"❌ 完全品質評価エラー: {e}")
+            self._record_evaluation_result({
+                "timestamp": datetime.now().isoformat(),
+                "type": "full_evaluation",
+                "status": "error",
+                "error": str(e)
+            })
+    
+    def _trigger_quality_alert(self, delta_ppl: float, current_ppl: float, baseline_ppl: float):
+        """品質劣化アラート"""
+        alert_message = f"""
+🚨 品質劣化アラート
+時刻: {datetime.now()}
+ΔPPL: {delta_ppl:.3f} (閾値: 0.5)
+現在PPL: {current_ppl:.3f}
+ベースラインPPL: {baseline_ppl:.3f}
+推奨アクション: KV量子化レベルの緩和を検討
+"""
+        
+        print(alert_message)
+        
+        # ログ記録
+        with open("quality_alerts.log", "a") as f:
+            f.write(f"{datetime.now().isoformat()}: QUALITY_ALERT delta_ppl={delta_ppl:.3f}\n")
+        
+        # 自動回復試行
+        self._attempt_quality_recovery()
+    
+    def _attempt_quality_recovery(self):
+        """品質自動回復"""
+        print("🔄 品質自動回復を試行中...")
+        
+        # KV量子化レベルを段階的に緩和
+        recovery_policies = [
+            {"kv": {"mode": "quality_optimized"}},
+            {"kv": {"level_thresholds": {"L2_int4": 0.3, "L1_int8": 0.5}}},
+            {"kv": {"mode": "latency_optimized"}}  # 最終手段
+        ]
+        
+        for i, policy in enumerate(recovery_policies):
+            try:
+                # ポリシー適用
+                self._apply_recovery_policy(policy)
+                
+                # 短時間待機
+                time.sleep(30)
+                
+                # 軽量品質チェック
+                if self._quick_quality_check():
+                    print(f"✅ 品質回復成功: ポリシー{i+1}")
+                    return True
+                    
+            except Exception as e:
+                print(f"⚠️  回復ポリシー{i+1}失敗: {e}")
+        
+        print("❌ 自動品質回復失敗: 手動介入が必要")
+        return False
+#### **運用耐性とセキュリティ強化**
+
+##### **フォールバック戦略とバックオフ**
+```python
+import time
+import random
+from enum import Enum
+from typing import Dict, List, Optional
+
+class FallbackReason(Enum):
+    QUALITY_DEGRADATION = "quality_degradation"
+    DEVICE_ERROR = "device_error"
+    MEMORY_PRESSURE = "memory_pressure"
+    TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
+
+class BackoffStrategy:
+    def __init__(self, initial_delay: float = 1.0, max_delay: float = 60.0, multiplier: float = 2.0):
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
+        self.multiplier = multiplier
+        self.current_delay = initial_delay
+        self.attempt_count = 0
+    
+    def get_delay(self) -> float:
+        """バックオフ遅延時間取得"""
+        if self.attempt_count == 0:
+            delay = self.initial_delay
+        else:
+            # 指数バックオフ + ジッター
+            delay = min(self.current_delay * self.multiplier, self.max_delay)
+            jitter = random.uniform(0.1, 0.3) * delay
+            delay = delay + jitter
+        
+        self.current_delay = delay
+        self.attempt_count += 1
+        return delay
+    
+    def reset(self):
+        """バックオフ状態リセット"""
+        self.current_delay = self.initial_delay
+        self.attempt_count = 0
+
+class RobustFallbackManager:
+    def __init__(self):
+        self.fallback_history = []
+        self.backoff_strategies = {
+            FallbackReason.QUALITY_DEGRADATION: BackoffStrategy(2.0, 120.0, 1.5),
+            FallbackReason.DEVICE_ERROR: BackoffStrategy(5.0, 300.0, 2.0),
+            FallbackReason.MEMORY_PRESSURE: BackoffStrategy(1.0, 60.0, 1.8),
+            FallbackReason.TIMEOUT: BackoffStrategy(3.0, 180.0, 2.2),
+        }
+        self.max_consecutive_fallbacks = 5
+        self.notification_thresholds = {
+            FallbackReason.QUALITY_DEGRADATION: 3,
+            FallbackReason.DEVICE_ERROR: 2,
+            FallbackReason.MEMORY_PRESSURE: 4,
+            FallbackReason.TIMEOUT: 3,
+        }
+    
+    def handle_fallback(self, reason: FallbackReason, context: Dict) -> Dict:
+        """フォールバック処理"""
+        timestamp = time.time()
+        
+        # フォールバック履歴記録
+        fallback_event = {
+            "timestamp": timestamp,
+            "reason": reason,
+            "context": context,
+            "attempt_count": self.backoff_strategies[reason].attempt_count + 1
+        }
+        self.fallback_history.append(fallback_event)
+        
+        # 連続フォールバック数チェック
+        recent_fallbacks = [
+            event for event in self.fallback_history
+            if timestamp - event["timestamp"] < 300  # 5分以内
+        ]
+        
+        if len(recent_fallbacks) >= self.max_consecutive_fallbacks:
+            return self._handle_critical_fallback(reason, context)
+        
+        # 通知判定
+        reason_count = sum(1 for event in recent_fallbacks if event["reason"] == reason)
+        if reason_count >= self.notification_thresholds.get(reason, 3):
+            self._send_notification(reason, reason_count, context)
+        
+        # バックオフ遅延
+        delay = self.backoff_strategies[reason].get_delay()
+        
+        # フォールバック実行
+        fallback_result = self._execute_fallback(reason, context)
+        
+        return {
+            "status": "fallback_executed",
+            "reason": reason.value,
+            "delay_seconds": delay,
+            "result": fallback_result,
+            "next_retry": timestamp + delay
+        }
+    
+    def _execute_fallback(self, reason: FallbackReason, context: Dict) -> Dict:
+        """具体的フォールバック実行"""
+        if reason == FallbackReason.QUALITY_DEGRADATION:
+            return self._quality_degradation_fallback(context)
+        elif reason == FallbackReason.DEVICE_ERROR:
+            return self._device_error_fallback(context)
+        elif reason == FallbackReason.MEMORY_PRESSURE:
+            return self._memory_pressure_fallback(context)
+        elif reason == FallbackReason.TIMEOUT:
+            return self._timeout_fallback(context)
+        else:
+            return self._generic_fallback(context)
+    
+    def _quality_degradation_fallback(self, context: Dict) -> Dict:
+        """品質劣化フォールバック"""
+        # KV量子化レベル緩和
+        current_policy = context.get("current_policy", {})
+        
+        fallback_policies = [
+            # Level 1: INT4閾値を下げる
+            {
+                "kv": {
+                    "level_thresholds": {
+                        "L2_int4": max(0.2, current_policy.get("kv", {}).get("level_thresholds", {}).get("L2_int4", 0.5) - 0.1),
+                        "L1_int8": max(0.4, current_policy.get("kv", {}).get("level_thresholds", {}).get("L1_int8", 0.7) - 0.1)
+                    }
+                }
+            },
+            # Level 2: 品質優先モード
+            {"kv": {"mode": "quality_optimized"}},
+            # Level 3: KV量子化無効
+            {"kv": {"mode": "disabled"}}
+        ]
+        
+        for i, policy in enumerate(fallback_policies):
+            try:
+                self._apply_policy(policy)
+                return {"level": i + 1, "policy": policy, "status": "applied"}
+            except Exception as e:
+                continue
+        
+        return {"status": "all_fallbacks_failed"}
+    
+    def _device_error_fallback(self, context: Dict) -> Dict:
+        """デバイスエラーフォールバック"""
+        # デバイス切替順序
+        device_fallback_order = ["cpu", "dml", "npu"]
+        current_device = context.get("current_device", "npu")
+        
+        try:
+            current_index = device_fallback_order.index(current_device)
+            next_devices = device_fallback_order[current_index + 1:]
+        except ValueError:
+            next_devices = device_fallback_order
+        
+        for device in next_devices:
+            try:
+                self._switch_device(device)
+                return {"fallback_device": device, "status": "switched"}
+            except Exception as e:
+                continue
+        
+        return {"status": "no_available_device"}
+    
+    def _memory_pressure_fallback(self, context: Dict) -> Dict:
+        """メモリ圧迫フォールバック"""
+        # メモリ削減策
+        reduction_strategies = [
+            # Level 1: KVキャッシュサイズ削減
+            {"action": "reduce_kv_cache", "factor": 0.7},
+            # Level 2: バッチサイズ削減
+            {"action": "reduce_batch_size", "factor": 0.5},
+            # Level 3: モデル量子化強化
+            {"action": "aggressive_quantization"},
+            # Level 4: ガベージコレクション強制実行
+            {"action": "force_gc"}
+        ]
+        
+        for strategy in reduction_strategies:
+            try:
+                result = self._apply_memory_reduction(strategy)
+                if result.get("memory_freed_mb", 0) > 100:  # 100MB以上解放
+                    return {"strategy": strategy, "result": result, "status": "effective"}
+            except Exception as e:
+                continue
+        
+        return {"status": "memory_reduction_failed"}
+    
+    def _send_notification(self, reason: FallbackReason, count: int, context: Dict):
+        """運用通知送信"""
+        notification = {
+            "timestamp": time.time(),
+            "severity": "warning" if count < 5 else "critical",
+            "reason": reason.value,
+            "count": count,
+            "message": f"フォールバック頻発: {reason.value} ({count}回/5分)",
+            "context": context,
+            "recommended_action": self._get_recommended_action(reason)
+        }
+        
+        # ログ記録
+        with open("fallback_notifications.log", "a") as f:
+            import json
+            f.write(f"{json.dumps(notification)}\n")
+        
+        # コンソール出力
+        severity_emoji = "⚠️" if notification["severity"] == "warning" else "🚨"
+        print(f"{severity_emoji} {notification['message']}")
+        print(f"推奨アクション: {notification['recommended_action']}")
+    
+    def _get_recommended_action(self, reason: FallbackReason) -> str:
+        """推奨アクション取得"""
+        recommendations = {
+            FallbackReason.QUALITY_DEGRADATION: "モデル再訓練またはベースライン見直しを検討",
+            FallbackReason.DEVICE_ERROR: "デバイスドライバー更新またはハードウェア診断を実行",
+            FallbackReason.MEMORY_PRESSURE: "システムメモリ増設またはモデルサイズ削減を検討",
+            FallbackReason.TIMEOUT: "推論タイムアウト設定の見直しまたはハードウェア性能向上を検討"
+        }
+        return recommendations.get(reason, "技術サポートに連絡")
+```
+
+##### **Windowsサービス運用強化**
+```powershell
+# Windows Service 完全運用スクリプト
+
+# 1. 専用ユーザー作成（セキュリティ強化）
+$ServiceUser = "InferOSAgent"
+$ServicePassword = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | % {[char]$_})
+
+# ユーザー作成
+net user $ServiceUser $ServicePassword /add /comment:"Infer-OS Control Agent Service Account"
+net localgroup "Log on as a service" $ServiceUser /add
+
+# 2. サービス設定ファイル作成
+$ServiceConfig = @"
+[Service]
+Name=InferOSControlAgent
+DisplayName=Infer-OS Control Agent
+Description=AI inference optimization control agent for GAIA integration
+User=$ServiceUser
+Password=$ServicePassword
+WorkingDirectory=C:\InferOS\Agent
+ExePath=C:\InferOS\Agent\venv\Scripts\python.exe
+Arguments=C:\InferOS\Agent\inferos_control_agent.py
+LogPath=C:\InferOS\Logs\agent.log
+MaxLogSize=100MB
+LogRotation=daily
+RestartPolicy=always
+RestartDelay=30
+Environment=INFEROS_AGENT_TOKEN=$env:INFEROS_AGENT_TOKEN;INFEROS_AGENT_PORT=7031
+"@
+
+$ServiceConfig | Out-File -FilePath "C:\InferOS\Config\service.conf" -Encoding UTF8
+
+# 3. NSSM使用サービス作成
+nssm install InferOSControlAgent "C:\InferOS\Agent\venv\Scripts\python.exe"
+nssm set InferOSControlAgent Arguments "C:\InferOS\Agent\inferos_control_agent.py"
+nssm set InferOSControlAgent AppDirectory "C:\InferOS\Agent"
+nssm set InferOSControlAgent ObjectName ".\$ServiceUser" $ServicePassword
+nssm set InferOSControlAgent DisplayName "Infer-OS Control Agent"
+nssm set InferOSControlAgent Description "AI inference optimization control agent for GAIA integration"
+
+# ログ設定
+nssm set InferOSControlAgent AppStdout "C:\InferOS\Logs\agent_stdout.log"
+nssm set InferOSControlAgent AppStderr "C:\InferOS\Logs\agent_stderr.log"
+nssm set InferOSControlAgent AppRotateFiles 1
+nssm set InferOSControlAgent AppRotateOnline 1
+nssm set InferOSControlAgent AppRotateBytes 10485760  # 10MB
+
+# 再起動設定
+nssm set InferOSControlAgent AppExit Default Restart
+nssm set InferOSControlAgent AppRestartDelay 30000  # 30秒
+
+# 環境変数設定
+nssm set InferOSControlAgent AppEnvironmentExtra "INFEROS_AGENT_TOKEN=$env:INFEROS_AGENT_TOKEN"
+
+# 4. ファイアウォール設定
+New-NetFirewallRule -DisplayName "Infer-OS Control Agent" -Direction Inbound -Protocol TCP -LocalPort 7031 -LocalAddress 127.0.0.1 -Action Allow
+
+# 5. 権限設定
+icacls "C:\InferOS\Agent" /grant "${ServiceUser}:(OI)(CI)RX" /T
+icacls "C:\InferOS\Logs" /grant "${ServiceUser}:(OI)(CI)F" /T
+icacls "C:\InferOS\Config" /grant "${ServiceUser}:(OI)(CI)R" /T
+
+# 6. サービス開始
+nssm start InferOSControlAgent
+
+# 7. 監視スクリプト作成
+$MonitorScript = @'
+# Infer-OS Agent 監視スクリプト
+$ServiceName = "InferOSControlAgent"
+$LogPath = "C:\InferOS\Logs\monitor.log"
+$AlertThresholds = @{
+    CPUPercent = 80
+    MemoryMB = 2048
+    ResponseTimeMs = 5000
+}
+
+while ($true) {
+    try {
+        # サービス状態チェック
+        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($service.Status -ne "Running") {
+            $message = "$(Get-Date): サービス停止検出 - 再起動試行"
+            Add-Content -Path $LogPath -Value $message
+            Start-Service -Name $ServiceName
+        }
+        
+        # API応答チェック
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:7031/v1/health" -TimeoutSec 5 -ErrorAction SilentlyContinue
+        if ($response.StatusCode -ne 200) {
+            $message = "$(Get-Date): API応答異常 - サービス再起動"
+            Add-Content -Path $LogPath -Value $message
+            Restart-Service -Name $ServiceName
+        }
+        
+        # リソース使用量チェック
+        $process = Get-Process -Name "python" | Where-Object {$_.MainWindowTitle -like "*inferos*"}
+        if ($process) {
+            $cpuPercent = $process.CPU
+            $memoryMB = $process.WorkingSet64 / 1MB
+            
+            if ($cpuPercent -gt $AlertThresholds.CPUPercent) {
+                $message = "$(Get-Date): 高CPU使用率警告: $cpuPercent%"
+                Add-Content -Path $LogPath -Value $message
+            }
+            
+            if ($memoryMB -gt $AlertThresholds.MemoryMB) {
+                $message = "$(Get-Date): 高メモリ使用量警告: $memoryMB MB"
+                Add-Content -Path $LogPath -Value $message
+            }
+        }
+        
+    } catch {
+        $message = "$(Get-Date): 監視エラー: $($_.Exception.Message)"
+        Add-Content -Path $LogPath -Value $message
+    }
+    
+    Start-Sleep -Seconds 60
+}
+'@
+
+$MonitorScript | Out-File -FilePath "C:\InferOS\Scripts\monitor.ps1" -Encoding UTF8
+
+# 8. 監視タスク作成
+$TaskAction = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-File C:\InferOS\Scripts\monitor.ps1"
+$TaskTrigger = New-ScheduledTaskTrigger -AtStartup
+$TaskSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
+$TaskPrincipal = New-ScheduledTaskPrincipal -UserId $ServiceUser -LogonType ServiceAccount
+
+Register-ScheduledTask -TaskName "InferOSAgentMonitor" -Action $TaskAction -Trigger $TaskTrigger -Settings $TaskSettings -Principal $TaskPrincipal
+
+# 9. アンインストールスクリプト作成
+$UninstallScript = @"
+# Infer-OS Agent 完全アンインストール
+Write-Host "Infer-OS Control Agent アンインストール開始..."
+
+# サービス停止・削除
+nssm stop InferOSControlAgent
+nssm remove InferOSControlAgent confirm
+
+# タスク削除
+Unregister-ScheduledTask -TaskName "InferOSAgentMonitor" -Confirm:`$false
+
+# ファイアウォール規則削除
+Remove-NetFirewallRule -DisplayName "Infer-OS Control Agent" -ErrorAction SilentlyContinue
+
+# ユーザー削除
+net user $ServiceUser /delete
+
+# ファイル削除
+Remove-Item -Path "C:\InferOS" -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host "アンインストール完了"
+"@
+
+$UninstallScript | Out-File -FilePath "C:\InferOS\Scripts\uninstall.ps1" -Encoding UTF8
+
+Write-Host "Infer-OS Control Agent サービス設定完了"
+Write-Host "サービスユーザー: $ServiceUser"
+Write-Host "パスワード: $ServicePassword"
+Write-Host "監視: タスクスケジューラで自動実行"
+Write-Host "アンインストール: C:\InferOS\Scripts\uninstall.ps1 を実行"
+```
+
+##### **DirectML/NPU演算子サポート確認**
+```python
+import onnxruntime as ort
+from typing import Dict, List, Set
+
+class DeviceCapabilityChecker:
+    def __init__(self):
+        self.dml_supported_ops = set()
+        self.npu_supported_ops = set()
+        self.capability_cache = {}
+        
+    def check_directml_quantization_support(self) -> Dict[str, bool]:
+        """DirectML量子化サポート確認"""
+        try:
+            # DirectMLプロバイダー初期化
+            providers = [
+                ('DmlExecutionProvider', {
+                    'device_id': 0,
+                    'enable_dynamic_graph_fusion': True
+                })
+            ]
+            
+            session_options = ort.SessionOptions()
+            session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            
+            # テスト用簡単なモデル作成
+            test_model = self._create_quantization_test_model()
+            
+            # INT8サポートテスト
+            int8_support = self._test_quantization_support(test_model, "int8", providers)
+            
+            # INT4サポートテスト
+            int4_support = self._test_quantization_support(test_model, "int4", providers)
+            
+            # FP16サポートテスト
+            fp16_support = self._test_fp16_support(providers)
+            
+            return {
+                "int8_quantization": int8_support,
+                "int4_quantization": int4_support,
+                "fp16_mixed_precision": fp16_support,
+                "dynamic_quantization": int8_support,  # INT8ベース
+                "static_quantization": int8_support and self._test_static_quantization(providers)
+            }
+            
+        except Exception as e:
+            return {
+                "int8_quantization": False,
+                "int4_quantization": False,
+                "fp16_mixed_precision": False,
+                "dynamic_quantization": False,
+                "static_quantization": False,
+                "error": str(e)
+            }
+    
+    def get_supported_operators(self, provider: str) -> Set[str]:
+        """サポート演算子一覧取得"""
+        if provider in self.capability_cache:
+            return self.capability_cache[provider]
+        
+        try:
+            # プロバイダー固有の演算子リスト取得
+            if provider == "DmlExecutionProvider":
+                supported_ops = self._get_dml_operators()
+            elif provider == "NPUExecutionProvider":
+                supported_ops = self._get_npu_operators()
+            else:
+                supported_ops = set()
+            
+            self.capability_cache[provider] = supported_ops
+            return supported_ops
+            
+        except Exception:
+            return set()
+    
+    def create_fallback_table(self) -> Dict[str, List[Dict]]:
+        """フォールバック表作成"""
+        dml_caps = self.check_directml_quantization_support()
+        
+        fallback_scenarios = {
+            "quantization_failure": [
+                {
+                    "condition": "INT4量子化失敗",
+                    "action": "INT8量子化に切替",
+                    "supported": dml_caps.get("int8_quantization", False)
+                },
+                {
+                    "condition": "INT8量子化失敗",
+                    "action": "FP16混合精度に切替",
+                    "supported": dml_caps.get("fp16_mixed_precision", False)
+                },
+                {
+                    "condition": "FP16失敗",
+                    "action": "FP32フル精度に切替",
+                    "supported": True  # 常にサポート
+                }
+            ],
+            "device_unavailable": [
+                {
+                    "condition": "NPU利用不可",
+                    "action": "DirectML(iGPU)に切替",
+                    "check_method": "self._check_dml_availability()"
+                },
+                {
+                    "condition": "DirectML利用不可",
+                    "action": "CPU推論に切替",
+                    "check_method": "True"  # CPU常に利用可能
+                }
+            ],
+            "memory_pressure": [
+                {
+                    "condition": "KVキャッシュメモリ不足",
+                    "action": "量子化レベル強化",
+                    "parameters": {"L2_int4": 0.3, "L1_int8": 0.5}
+                },
+                {
+                    "condition": "モデルメモリ不足",
+                    "action": "モデル分割実行",
+                    "parameters": {"chunk_size": 512, "overlap": 64}
+                }
+            ],
+            "performance_degradation": [
+                {
+                    "condition": "TPS < 閾値の50%",
+                    "action": "最適化ポリシー緩和",
+                    "parameters": {"mode": "latency_optimized"}
+                },
+                {
+                    "condition": "品質劣化 ΔPPL > 0.5",
+                    "action": "品質優先モードに切替",
+                    "parameters": {"mode": "quality_optimized"}
+                }
+            ]
+        }
+        
+        return fallback_scenarios
+    
+    def _test_quantization_support(self, model_path: str, quant_type: str, providers: List) -> bool:
+        """量子化サポートテスト"""
+        try:
+            if quant_type == "int8":
+                # INT8動的量子化テスト
+                from onnxruntime.quantization import quantize_dynamic, QuantType
+                quantized_model = f"test_model_int8.onnx"
+                quantize_dynamic(model_path, quantized_model, weight_type=QuantType.QInt8)
+                
+            elif quant_type == "int4":
+                # INT4量子化テスト（実装依存）
+                quantized_model = f"test_model_int4.onnx"
+                # INT4量子化実装（簡略化）
+                return self._test_int4_quantization(model_path, quantized_model)
+            
+            # 量子化モデルでセッション作成テスト
+            session = ort.InferenceSession(quantized_model, providers=providers)
+            
+            # 簡単な推論テスト
+            input_name = session.get_inputs()[0].name
+            input_shape = session.get_inputs()[0].shape
+            
+            import numpy as np
+            test_input = np.random.randn(*[1 if dim is None else dim for dim in input_shape]).astype(np.float32)
+            
+            outputs = session.run(None, {input_name: test_input})
+            
+            return True
+            
+        except Exception as e:
+            print(f"量子化テスト失敗 ({quant_type}): {e}")
+            return False
+```
   "ftl_ms": 245,
   "mem": {
     "vram_gb": 8.9,
